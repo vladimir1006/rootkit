@@ -23,7 +23,7 @@ PAUSE_FLAG := $(if $(PAUSE),--pause,)
 help: ## Afficher cette aide
 	@echo "Usage : make <cible> [STRICT=1] [PAUSE=1]"
 	@echo
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) \
+	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) \
 		| sed 's/:.*##/\t/' | expand -t 22
 	@echo
 

@@ -11,6 +11,8 @@
 #   ssh             se connecter en SSH a la VM
 #   push <fichier>  envoyer un fichier dans la VM via SCP
 #   pull <fichier>  recuperer un fichier de la VM via SCP
+#   setup-users     creer les comptes root + user dans la VM
+#   qcow2           convertir l'image en QCOW2 compresse
 #   status          etat du workspace OpenWrt
 #   clean           supprimer image et SDK
 #
@@ -37,6 +39,16 @@ OWRT_SDK_DIR="${OWRT_SDK_DIR:-$OWRT_DIR/sdk}"
 OWRT_SSH_PORT="${OWRT_SSH_PORT:-2222}"
 OWRT_HTTP_PORT="${OWRT_HTTP_PORT:-8080}"
 OWRT_RESIZE="${OWRT_RESIZE:-512M}"
+OWRT_QCOW2="${OWRT_QCOW2:-$OWRT_DIR/openwrt.qcow2}"
+OWRT_USER_NAME="${OWRT_USER_NAME:-user}"
+OWRT_USER_PASS="${OWRT_USER_PASS:-user}"
+OWRT_ROOT_PASS="${OWRT_ROOT_PASS:-root}"
+
+# --- options SSH partagees ---
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $OWRT_SSH_PORT"
+
+vm_exec() { ssh $SSH_OPTS root@localhost "$@"; }
+
 
 # ------------------------------------------------------------ fetch ---
 
@@ -146,8 +158,7 @@ cmd_run() {
 cmd_ssh() {
     need_cmd ssh
     echo "Connexion SSH a la VM OpenWrt..."
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -p "$OWRT_SSH_PORT" root@localhost "$@"
+    ssh $SSH_OPTS root@localhost "$@"
 }
 
 cmd_push() {
@@ -156,8 +167,7 @@ cmd_push() {
     local src="$1"
     local dst="${2:-/tmp/$(basename "$1")}"
     need_file "$src" "fichier a envoyer"
-    scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -P "$OWRT_SSH_PORT" "$src" "root@localhost:$dst"
+    scp $SSH_OPTS "$src" "root@localhost:$dst"
     echo "Envoye : $src -> VM:$dst"
 }
 
@@ -166,9 +176,30 @@ cmd_pull() {
     need_cmd scp
     local src="$1"
     local dst="${2:-.}"
-    scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -P "$OWRT_SSH_PORT" "root@localhost:$src" "$dst"
+    scp $SSH_OPTS "root@localhost:$src" "$dst"
     echo "Recupere : VM:$src -> $dst"
+}
+
+# -------------------------------------------------------- setup-users ---
+
+cmd_setup_users() {
+    need_cmd ssh
+    log "Configuration des comptes (root + ${OWRT_USER_NAME})"
+
+    echo "Mot de passe root..."
+    vm_exec "echo 'root:${OWRT_ROOT_PASS}' | chpasswd"
+
+    echo "Creation du compte ${OWRT_USER_NAME}..."
+    vm_exec "grep -q '^${OWRT_USER_NAME}:' /etc/passwd 2>/dev/null && { echo 'Compte deja present'; exit 0; }; \
+        echo '${OWRT_USER_NAME}:x:1000:1000:${OWRT_USER_NAME}:/home/${OWRT_USER_NAME}:/bin/ash' >> /etc/passwd; \
+        echo '${OWRT_USER_NAME}:x:1000:' >> /etc/group; \
+        mkdir -p /home/${OWRT_USER_NAME}; \
+        chown ${OWRT_USER_NAME}:${OWRT_USER_NAME} /home/${OWRT_USER_NAME}; \
+        echo '${OWRT_USER_NAME}:${OWRT_USER_PASS}' | chpasswd"
+
+    echo "Comptes configures."
+    echo "  root / ${OWRT_ROOT_PASS}"
+    echo "  ${OWRT_USER_NAME} / ${OWRT_USER_PASS}"
 }
 
 # -------------------------------------------------------- module-template ---
@@ -243,6 +274,17 @@ ENDPKG
     echo "Pour charger dans la VM :"
     echo "  ./scripts/openwrt.sh push <chemin>/monmodule.ko"
     echo "  ./scripts/openwrt.sh ssh insmod /tmp/monmodule.ko"
+}
+
+# ------------------------------------------------------------ qcow2 ---
+
+cmd_qcow2() {
+    need_cmd qemu-img
+    need_file "$OWRT_IMG" "lance d'abord : $0 fetch"
+
+    log "Conversion en QCOW2 compresse"
+    qemu-img convert -c -f raw -O qcow2 "$OWRT_IMG" "$OWRT_QCOW2"
+    echo "Image QCOW2 : $OWRT_QCOW2 ($(du -h "$OWRT_QCOW2" | cut -f1))"
 }
 
 # ------------------------------------------------------------ status ---
