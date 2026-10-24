@@ -185,14 +185,26 @@ cmd_setup_user() {
     need_cmd ssh
     log "Creation du compte ${OWRT_USER_NAME}"
 
-    vm_exec "grep -q '^${OWRT_USER_NAME}:' /etc/passwd 2>/dev/null && { echo 'Compte deja present'; exit 0; }; \
-        echo '${OWRT_USER_NAME}:x:1000:1000:${OWRT_USER_NAME}:/home/${OWRT_USER_NAME}:/bin/ash' >> /etc/passwd; \
-        echo '${OWRT_USER_NAME}:x:1000:' >> /etc/group; \
-        mkdir -p /home/${OWRT_USER_NAME}; \
-        chown ${OWRT_USER_NAME}:${OWRT_USER_NAME} /home/${OWRT_USER_NAME}; \
-        echo '${OWRT_USER_NAME}:${OWRT_USER_PASS}' | chpasswd"
+    local name="$OWRT_USER_NAME"
+    local pass="$OWRT_USER_PASS"
 
-    echo "Compte cree : ${OWRT_USER_NAME} / ${OWRT_USER_PASS}"
+    # Verifier si le compte existe deja
+    if vm_exec "grep -q '^${name}:' /etc/passwd" 2>/dev/null; then
+        echo "Compte deja present."
+        return 0
+    fi
+
+    # Creer l'entree passwd + group
+    vm_exec "echo '${name}:x:1000:1000:${name}:/home/${name}:/bin/ash' >> /etc/passwd"
+    vm_exec "echo '${name}:x:1000:' >> /etc/group"
+
+    # Home directory
+    vm_exec "mkdir -p /home/${name} && chown ${name}:${name} /home/${name}"
+
+    # Mot de passe
+    vm_exec "echo '${name}:${pass}' | chpasswd"
+
+    echo "Compte cree : ${name} / ${pass}"
 }
 
 # -------------------------------------------------------- module-template ---
