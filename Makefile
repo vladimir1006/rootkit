@@ -4,7 +4,7 @@
 #   make companion         compiler le programme compagnon
 #   make test              tester le compagnon (CLI)
 #   make owrt-run          demarrer la VM OpenWrt
-#   make owrt-setup-users  creer les comptes root + user
+#   make owrt-setup-user  creer les comptes root + user
 #   make owrt-qcow2        image QCOW2 compressee (livraison)
 #
 # Variables :
@@ -18,7 +18,7 @@ PAUSE_FLAG := $(if $(PAUSE),--pause,)
 .PHONY: help companion test clean-companion \
         owrt-fetch owrt-resize owrt-sdk owrt-run owrt-ssh \
         owrt-module owrt-push owrt-pull \
-        owrt-setup-users owrt-qcow2 owrt-status owrt-clean
+        owrt-setup-user owrt-qcow2 owrt-status owrt-clean
 
 help: ## Afficher cette aide
 	@echo "Usage : make <cible> [STRICT=1] [PAUSE=1]"
@@ -64,8 +64,8 @@ owrt-push: ## Envoyer un fichier dans la VM : make owrt-push F=<fichier>
 owrt-pull: ## Recuperer un fichier de la VM : make owrt-pull F=<fichier>
 	@$(S)/openwrt.sh pull $(F)
 
-owrt-setup-users: ## Creer les comptes root + user dans la VM
-	@$(S)/openwrt.sh setup-users
+owrt-setup-user: ## Creer le compte utilisateur dans la VM
+	@$(S)/openwrt.sh setup-user
 
 owrt-qcow2: ## Convertir l'image en QCOW2 compresse (livraison)
 	@$(S)/openwrt.sh qcow2

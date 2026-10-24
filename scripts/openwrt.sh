@@ -11,7 +11,7 @@
 #   ssh             se connecter en SSH a la VM
 #   push <fichier>  envoyer un fichier dans la VM via SCP
 #   pull <fichier>  recuperer un fichier de la VM via SCP
-#   setup-users     creer les comptes root + user dans la VM
+#   setup-user      creer le compte utilisateur dans la VM
 #   qcow2           convertir l'image en QCOW2 compresse
 #   status          etat du workspace OpenWrt
 #   clean           supprimer image et SDK
@@ -42,7 +42,6 @@ OWRT_RESIZE="${OWRT_RESIZE:-512M}"
 OWRT_QCOW2="${OWRT_QCOW2:-$OWRT_DIR/openwrt.qcow2}"
 OWRT_USER_NAME="${OWRT_USER_NAME:-user}"
 OWRT_USER_PASS="${OWRT_USER_PASS:-user}"
-OWRT_ROOT_PASS="${OWRT_ROOT_PASS:-root}"
 
 # --- options SSH partagees ---
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $OWRT_SSH_PORT"
@@ -180,16 +179,12 @@ cmd_pull() {
     echo "Recupere : VM:$src -> $dst"
 }
 
-# -------------------------------------------------------- setup-users ---
+# --------------------------------------------------------- setup-user ---
 
-cmd_setup_users() {
+cmd_setup_user() {
     need_cmd ssh
-    log "Configuration des comptes (root + ${OWRT_USER_NAME})"
+    log "Creation du compte ${OWRT_USER_NAME}"
 
-    echo "Mot de passe root..."
-    vm_exec "echo 'root:${OWRT_ROOT_PASS}' | chpasswd"
-
-    echo "Creation du compte ${OWRT_USER_NAME}..."
     vm_exec "grep -q '^${OWRT_USER_NAME}:' /etc/passwd 2>/dev/null && { echo 'Compte deja present'; exit 0; }; \
         echo '${OWRT_USER_NAME}:x:1000:1000:${OWRT_USER_NAME}:/home/${OWRT_USER_NAME}:/bin/ash' >> /etc/passwd; \
         echo '${OWRT_USER_NAME}:x:1000:' >> /etc/group; \
@@ -197,9 +192,7 @@ cmd_setup_users() {
         chown ${OWRT_USER_NAME}:${OWRT_USER_NAME} /home/${OWRT_USER_NAME}; \
         echo '${OWRT_USER_NAME}:${OWRT_USER_PASS}' | chpasswd"
 
-    echo "Comptes configures."
-    echo "  root / ${OWRT_ROOT_PASS}"
-    echo "  ${OWRT_USER_NAME} / ${OWRT_USER_PASS}"
+    echo "Compte cree : ${OWRT_USER_NAME} / ${OWRT_USER_PASS}"
 }
 
 # -------------------------------------------------------- module-template ---
