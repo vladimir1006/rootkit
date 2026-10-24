@@ -44,9 +44,10 @@ OWRT_USER_NAME="${OWRT_USER_NAME:-user}"
 OWRT_USER_PASS="${OWRT_USER_PASS:-user}"
 
 # --- options SSH partagees ---
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $OWRT_SSH_PORT"
+SSH_COMMON="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-vm_exec() { ssh $SSH_OPTS root@localhost "$@"; }
+vm_exec() { ssh $SSH_COMMON -p "$OWRT_SSH_PORT" root@localhost "$@"; }
+vm_scp()  { scp $SSH_COMMON -P "$OWRT_SSH_PORT" "$@"; }
 
 
 # ------------------------------------------------------------ fetch ---
@@ -157,7 +158,7 @@ cmd_run() {
 cmd_ssh() {
     need_cmd ssh
     echo "Connexion SSH a la VM OpenWrt..."
-    ssh $SSH_OPTS root@localhost "$@"
+    ssh $SSH_COMMON -p "$OWRT_SSH_PORT" root@localhost "$@"
 }
 
 cmd_push() {
@@ -166,7 +167,7 @@ cmd_push() {
     local src="$1"
     local dst="${2:-/tmp/$(basename "$1")}"
     need_file "$src" "fichier a envoyer"
-    scp $SSH_OPTS "$src" "root@localhost:$dst"
+    vm_scp "$src" "root@localhost:$dst"
     echo "Envoye : $src -> VM:$dst"
 }
 
@@ -175,7 +176,7 @@ cmd_pull() {
     need_cmd scp
     local src="$1"
     local dst="${2:-.}"
-    scp $SSH_OPTS "root@localhost:$src" "$dst"
+    vm_scp "root@localhost:$src" "$dst"
     echo "Recupere : VM:$src -> $dst"
 }
 
