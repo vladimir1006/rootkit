@@ -47,7 +47,7 @@ OWRT_USER_PASS="${OWRT_USER_PASS:-user}"
 SSH_COMMON="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 vm_exec() { ssh $SSH_COMMON -p "$OWRT_SSH_PORT" root@localhost "$@"; }
-vm_scp()  { scp $SSH_COMMON -P "$OWRT_SSH_PORT" "$@"; }
+vm_scp()  { scp -O $SSH_COMMON -P "$OWRT_SSH_PORT" "$@"; }
 
 
 # ------------------------------------------------------------ fetch ---
