@@ -1,0 +1,9 @@
+# État local des assistants IA
+.agents/
+.aider*
+.claude/
+.codex/
+.continue/
+.cursor/
+.gemini/
+.windsurf/
