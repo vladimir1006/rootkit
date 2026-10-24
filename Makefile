@@ -1,103 +1,77 @@
-# Makefile — raccourcis vers scripts/. Aucune logique ici.
+# Makefile — projet rootkit rk2600 (Ecole 2600).
+#
+# Cibles principales :
+#   make companion         compiler le programme compagnon
+#   make test              tester le compagnon (CLI)
+#   make owrt-run          demarrer la VM OpenWrt
+#   make owrt-setup-users  creer les comptes root + user
+#   make owrt-qcow2        image QCOW2 compressee (livraison)
 #
 # Variables :
-#   PROFILE=base|debug   quel noyau (défaut : base)
-#   PAUSE=1              démarrer figé, en attente de GDB
-#
-# Exemples :
-#   make kernel PROFILE=debug
-#   make run-nfs PROFILE=debug PAUSE=1
+#   STRICT=1   active -Werror sur le compagnon
+#   PAUSE=1    demarrer la VM figee (GDB)
 
-S := ./infra/scripts
-PROFILE ?= base
+S := ./scripts
 PAUSE_FLAG := $(if $(PAUSE),--pause,)
 
 .DEFAULT_GOAL := help
-.PHONY: help status deps kernel kernel-debug config clean-kernel mrproper \
-        rootfs busybox initramfs nfsroot nfs-server \
-        disk disk-image disk-alpine disk-grub mount umount \
-        run run-nfs run-disk gdb all
+.PHONY: help companion test clean-companion \
+        owrt-fetch owrt-resize owrt-sdk owrt-run owrt-ssh \
+        owrt-module owrt-push owrt-pull \
+        owrt-setup-users owrt-qcow2 owrt-status owrt-clean
 
 help: ## Afficher cette aide
-	@echo "Usage : make <cible> [PROFILE=base|debug] [PAUSE=1]"
+	@echo "Usage : make <cible> [STRICT=1] [PAUSE=1]"
 	@echo
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) \
-		| sed 's/:.*##/\t/' | expand -t 18
+		| sed 's/:.*##/\t/' | expand -t 22
 	@echo
-	@echo "PROFILE courant : $(PROFILE)"
 
-status: ## État du workspace (fichiers présents ou non)
-	@$(S)/common.sh
+# ----------------------------------------------------------- companion ---
 
-# ------------------------------------------------------------------ noyau ---
+companion: ## Compiler le programme compagnon
+	@$(MAKE) -C companion $(if $(STRICT),STRICT=1,)
 
-deps: ## Installer les paquets de compilation
-	@$(S)/build_kernel.sh deps
+test: companion ## Tester le compagnon (CLI + limites)
+	@$(MAKE) -C companion STRICT=1 test
 
-kernel: ## Compiler le noyau (fetch + config + compile)
-	@$(S)/build_kernel.sh all $(PROFILE)
+clean-companion: ## Nettoyer le binaire compagnon
+	@$(MAKE) -C companion clean
 
-kernel-debug: ## Compiler le noyau avec les symboles de debug
-	@$(S)/build_kernel.sh all debug
+# ------------------------------------------------------------ OpenWrt -----
 
-config: ## Écrire seulement la config du profil
-	@$(S)/build_kernel.sh config $(PROFILE)
+owrt-fetch: ## Telecharger l'image OpenWrt x86-64
+	@$(S)/openwrt.sh fetch
 
-clean-kernel: ## Supprimer le dossier de build du profil
-	@$(S)/build_kernel.sh clean $(PROFILE)
+owrt-resize: ## Agrandir l'image OpenWrt (defaut 512M)
+	@$(S)/openwrt.sh resize
 
-mrproper: ## Nettoyer les sources (une fois, avant d'utiliser les builds séparés)
-	@$(S)/build_kernel.sh mrproper
+owrt-sdk: ## Telecharger le SDK OpenWrt (compilation de modules)
+	@$(S)/openwrt.sh sdk
 
-# ----------------------------------------------------------------- rootfs ---
+owrt-run: ## Demarrer OpenWrt dans QEMU (SSH :2222, HTTP :8080)
+	@$(S)/openwrt.sh run $(PAUSE_FLAG)
 
-rootfs: ## busybox + initramfs + nfsroot
-	@$(S)/build_rootfs.sh all
+owrt-ssh: ## Se connecter en SSH a la VM OpenWrt
+	@$(S)/openwrt.sh ssh
 
-busybox: ## Compiler busybox (statique, sans tc)
-	@$(S)/build_rootfs.sh busybox
+owrt-module: ## Creer un template de module kernel OpenWrt
+	@$(S)/openwrt.sh module-template
 
-initramfs: ## Reconstruire initramfs.cpio.gz
-	@$(S)/build_rootfs.sh initramfs
+owrt-push: ## Envoyer un fichier dans la VM : make owrt-push F=<fichier>
+	@$(S)/openwrt.sh push $(F)
 
-nfsroot: ## Construire le rootfs NFS
-	@$(S)/build_rootfs.sh nfsroot
+owrt-pull: ## Recuperer un fichier de la VM : make owrt-pull F=<fichier>
+	@$(S)/openwrt.sh pull $(F)
 
-nfs-server: ## Exporter nfsroot/ et activer NFS (hôte)
-	@$(S)/build_rootfs.sh nfs-server
+owrt-setup-users: ## Creer les comptes root + user dans la VM
+	@$(S)/openwrt.sh setup-users
 
-# ------------------------------------------------------------ image disque --
+owrt-qcow2: ## Convertir l'image en QCOW2 compresse (livraison)
+	@$(S)/openwrt.sh qcow2
 
-disk: ## Image disque complète : image + alpine + grub
-	@$(S)/build_disk.sh all $(PROFILE)
+owrt-status: ## Etat du workspace OpenWrt
+	@$(S)/openwrt.sh status
 
-disk-image: ## Créer et formater disk.img
-	@$(S)/build_disk.sh image
-
-disk-alpine: ## Peupler l'image avec Alpine
-	@$(S)/build_disk.sh alpine
-
-disk-grub: ## Installer le noyau du profil et GRUB dans l'image
-	@$(S)/build_disk.sh grub $(PROFILE)
-
-mount: ## Monter disk.img pour la modifier à la main
-	@$(S)/build_disk.sh mount
-
-umount: ## Démonter disk.img
-	@$(S)/build_disk.sh umount
-
-# ---------------------------------------------------------------- QEMU -----
-
-run: ## Démarrer sur initramfs
-	@$(S)/run.sh initramfs $(PROFILE) $(PAUSE_FLAG)
-
-run-nfs: ## Démarrer sur le rootfs NFS
-	@$(S)/run.sh nfs $(PROFILE) $(PAUSE_FLAG)
-
-run-disk: ## Démarrer sur l'image disque (GRUB)
-	@$(S)/run.sh disk $(PAUSE_FLAG)
-
-gdb: ## Lancer GDB et se connecter à la VM en attente
-	@$(S)/run.sh gdb
-
-all: kernel rootfs ## Tout compiler (noyau + rootfs)
+owrt-clean: ## Supprimer image + SDK OpenWrt
+	@$(S)/openwrt.sh clean

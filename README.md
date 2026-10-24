@@ -1,25 +1,70 @@
-# Projet rootkit Linux
+# rk2600 — Rootkit LKM
 
-Projet de laboratoire en VM QEMU. Le dépôt contient des scripts de compilation
-du noyau, des rootfs BusyBox, une image disque Alpine avec GRUB, un protocole
-ioctl partagé et un programme compagnon.
+Projet de rootkit Linux (module noyau) pour le cours Noyau Linux, Ecole 2600.
 
-## État actuel
+## Architecture
 
-- `companion/` contient la CLI, son Makefile, les tests d'arguments et le guide utilisateur. Le client envoie ses requêtes à `/dev/rk2600`.
-- `include/rk2600_protocol.h` définit les commandes ioctl et les structures partagées avec le module.
-- `infra/scripts/` contient les scripts de compilation du noyau, de BusyBox, des rootfs et de l'image disque.
-- L'image disque générée utilise Alpine et le format raw. Les fichiers du module noyau ne sont pas encore présents dans ce dépôt.
-- La construction de l'image Alpine exige `ROOT_PASSWORD`, fourni dans l'environnement.
+```
+rootkit/
+├── companion/           programme compagnon (userspace CLI)
+│   ├── companion.c      client ioctl -> /dev/rk2600
+│   ├── Makefile
+│   └── tests/           tests CLI et limites
+├── include/
+│   └── rk2600_protocol.h   ABI partagee kernel/userspace (ioctl)
+├── module/              module noyau (.ko) — a ecrire
+├── scripts/
+│   ├── common.sh        variables et fonctions partagees
+│   └── openwrt.sh       setup et gestion de la VM OpenWrt
+└── Makefile             cibles racine (companion + OpenWrt)
+```
 
-Pour compiler et tester le compagnon sous WSL, lancez `make -C companion STRICT=1 test`.
+## Quickstart
 
-## À terminer pour le rendu
+```sh
+# 1. Telecharger et preparer la VM OpenWrt
+make owrt-fetch
+make owrt-resize
+make owrt-run              # terminal 1
 
-1. Construire la véritable LFS demandée, avec les comptes `root` et `user`.
-2. Écrire et intégrer le module noyau. Confirmer avec son auteur les numéros ioctl, les structures et la version définis dans `include/rk2600_protocol.h`.
-3. Créer `/dev/rk2600`, régler ses permissions, puis tester le compagnon avec le module chargé dans la VM. Les tests actuels ne vérifient pas les réponses réelles du module.
-4. Convertir le disque raw en QCOW2 compressé avec `qemu-img convert -c -O qcow2 disk.img disk.qcow2`, puis vérifier que l'image démarre dans QEMU.
-5. Compléter la documentation utilisateur et le rapport de conception avec la répartition des tâches.
+# 2. Configurer les comptes (terminal 2)
+make owrt-setup-users
 
-Le Makefile racine appelle les scripts de `infra/scripts/`.
+# 3. Compiler le compagnon
+make companion
+make test                  # tests CLI
+
+# 4. Envoyer dans la VM
+make owrt-push F=companion/companion
+
+# 5. Livraison : image QCOW2 compressee
+make owrt-qcow2
+```
+
+## Communication rootkit <-> compagnon
+
+Le compagnon parle au module via ioctl sur `/dev/rk2600` :
+
+| Commande | ioctl | Description |
+|----------|-------|-------------|
+| `status` | `RK2600_IOC_STATUS` | Lit la version de l'API du module |
+| `elevate` | `RK2600_IOC_ELEVATE` | Demande une elevation de privileges |
+| `hide NAME` | `RK2600_IOC_HIDE` | Cache une entree de repertoire |
+| `unhide NAME` | `RK2600_IOC_UNHIDE` | Revele une entree cachee |
+
+Le protocole est defini dans `include/rk2600_protocol.h`.
+
+## VM OpenWrt
+
+- Image : OpenWrt 23.05.6 x86-64 (ext4, modules chargeables sans signature)
+- SSH : `ssh root@localhost -p 2222`
+- Comptes : root / root, user / user (configurable)
+- Quitter QEMU : `Ctrl-A` puis `X`
+
+## A terminer
+
+1. Ecrire le module noyau (`module/`) : syscall hooking, stealth (getdents/read/write), persistance
+2. Creer `/dev/rk2600` au chargement du module (misc_register)
+3. Tester le compagnon avec le module dans la VM
+4. Persistence : script init pour charger le .ko au boot
+5. Documentation et rapport de conception

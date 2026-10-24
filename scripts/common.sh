@@ -7,7 +7,7 @@
 # Lancé directement, il affiche l'état du workspace.
 #
 # Toutes les variables sont surchargeables par l'environnement :
-#     KERNEL_VERSION=6.6.1 ./infra/scripts/build_kernel.sh all
+#     KERNEL_VERSION=6.6.1 ./scripts/build_kernel.sh all
 
 # Garde-fou : ne charger qu'une fois
 [ -n "${COMMON_SH:-}" ] && return 0
@@ -42,10 +42,10 @@ NFS_HOST_IP="${NFS_HOST_IP:-10.0.2.2}"     # l'hôte, vu depuis la VM (QEMU user
 NFS_GUEST_IP="${NFS_GUEST_IP:-10.0.2.15}"  # la VM
 
 DISK_IMG="${DISK_IMG:-$WORKSPACE/disk.img}"
-DISK_SIZE="${DISK_SIZE:-1G}"
+DISK_SIZE="${DISK_SIZE:-1G}" 
 MNT_DIR="${MNT_DIR:-/tmp/my-rootfs}"
 ALPINE_IMAGE="${ALPINE_IMAGE:-alpine}"
-ROOT_PASSWORD="${ROOT_PASSWORD:-}"
+ROOT_PASSWORD="${ROOT_PASSWORD:-toor}"   # VM de labo : mot de passe volontairement trivial
 
 QEMU_MEM="${QEMU_MEM:-512M}"
 QEMU_GDB_PORT="${QEMU_GDB_PORT:-1234}"
@@ -112,7 +112,7 @@ warn_if_outdated() {
     local p="${1:-base}"
     if kernel_outdated "$p"; then
         echo "Attention : des sources ont changé depuis la dernière compilation." >&2
-        echo "            Lance : ./infra/scripts/build_kernel.sh compile $p" >&2
+        echo "            Lance : ./scripts/build_kernel.sh compile $p" >&2
     fi
 }
 
