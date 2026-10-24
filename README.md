@@ -25,19 +25,24 @@ rootkit/
 # 1. Telecharger et preparer la VM OpenWrt
 make owrt-fetch
 make owrt-resize
-make owrt-run              # terminal 1
+make owrt-run              # terminal 1 — quitter : Ctrl-A puis X
 
-# 2. Configurer les comptes (terminal 2)
-make owrt-setup-users
+# 2. Dans la console QEMU : definir le mot de passe root
+passwd
 
-# 3. Compiler le compagnon
-make companion
-make test                  # tests CLI
+# 3. Initialiser la VM (terminal 2) — DHCP + cle SSH
+make owrt-init
 
-# 4. Envoyer dans la VM
+# 4. Creer un compte utilisateur (optionnel)
+make owrt-setup-user                    # user/user par defaut
+make owrt-setup-user U=myuser P=pass    # compte custom
+
+# 5. Compiler le compagnon (statique pour la VM musl/OpenWrt)
+make companion-static
+make test
 make owrt-push F=companion/companion
 
-# 5. Livraison : image QCOW2 compressee
+# 6. Livraison : image QCOW2 compressee
 make owrt-qcow2
 ```
 
@@ -57,8 +62,11 @@ Le protocole est defini dans `include/rk2600_protocol.h`.
 ## VM OpenWrt
 
 - Image : OpenWrt 23.05.6 x86-64 (ext4, modules chargeables sans signature)
-- SSH : `ssh root@localhost -p 2222`
-- Comptes : root / root, user / user (configurable)
+- Libc : **musl** (pas glibc) — les binaires doivent etre compiles en statique (`make companion-static`) ou cross-compiles avec le SDK OpenWrt
+- Reseau : DHCP via QEMU usernet (configure par `make owrt-init`)
+- SSH : `ssh root@localhost -p 2222` (cle SSH installee par `owrt-init`)
+- SCP : protocole legacy (`scp -O`) — OpenWrt n'a pas de sftp-server
+- Comptes : user/user par defaut (`make owrt-setup-user U=nom P=pass`)
 - Quitter QEMU : `Ctrl-A` puis `X`
 
 ## A terminer

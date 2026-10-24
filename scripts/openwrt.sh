@@ -11,8 +11,9 @@
 #   ssh             se connecter en SSH a la VM
 #   push <fichier>  envoyer un fichier dans la VM via SCP
 #   pull <fichier>  recuperer un fichier de la VM via SCP
+#   init            configurer DHCP + cle SSH (a faire une fois)
 #   setup-user      creer le compte utilisateur dans la VM
-#   qcow2           convertir l'image en QCOW2 compresse
+#   qcow2           convertir l'image en QCOW2 compresse (livraison)
 #   status          etat du workspace OpenWrt
 #   clean           supprimer image et SDK
 #
@@ -43,17 +44,15 @@ OWRT_QCOW2="${OWRT_QCOW2:-$OWRT_DIR/openwrt.qcow2}"
 OWRT_USER_NAME="${OWRT_USER_NAME:-user}"
 OWRT_USER_PASS="${OWRT_USER_PASS:-user}"
 
-# --- options SSH partagees ---
 SSH_COMMON="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 vm_exec() { ssh $SSH_COMMON -p "$OWRT_SSH_PORT" root@localhost "$@"; }
 vm_scp()  { scp -O $SSH_COMMON -P "$OWRT_SSH_PORT" "$@"; }
 
-
 # ------------------------------------------------------------ fetch ---
 
 cmd_fetch() {
-    need_cmd wget gunzip
+    need_cmd wget gzip
     log "Telechargement OpenWrt ${OWRT_VERSION} x86-64"
     mkdir -p "$OWRT_DIR"
 
@@ -158,7 +157,7 @@ cmd_run() {
 cmd_ssh() {
     need_cmd ssh
     echo "Connexion SSH a la VM OpenWrt..."
-    ssh $SSH_COMMON -p "$OWRT_SSH_PORT" root@localhost "$@"
+    vm_exec "$@"
 }
 
 cmd_push() {
@@ -178,34 +177,6 @@ cmd_pull() {
     local dst="${2:-.}"
     vm_scp "root@localhost:$src" "$dst"
     echo "Recupere : VM:$src -> $dst"
-}
-
-# --------------------------------------------------------- setup-user ---
-
-cmd_setup_user() {
-    need_cmd ssh
-    log "Creation du compte ${OWRT_USER_NAME}"
-
-    local name="$OWRT_USER_NAME"
-    local pass="$OWRT_USER_PASS"
-
-    # Verifier si le compte existe deja
-    if vm_exec "grep -q '^${name}:' /etc/passwd" 2>/dev/null; then
-        echo "Compte deja present."
-        return 0
-    fi
-
-    # Creer l'entree passwd + group
-    vm_exec "echo '${name}:x:1000:1000:${name}:/home/${name}:/bin/ash' >> /etc/passwd"
-    vm_exec "echo '${name}:x:1000:' >> /etc/group"
-
-    # Home directory
-    vm_exec "mkdir -p /home/${name} && chown ${name}:${name} /home/${name}"
-
-    # Mot de passe
-    vm_exec "echo '${name}:${pass}' | chpasswd"
-
-    echo "Compte cree : ${name} / ${pass}"
 }
 
 # -------------------------------------------------------- module-template ---
@@ -282,7 +253,125 @@ ENDPKG
     echo "  ./scripts/openwrt.sh ssh insmod /tmp/monmodule.ko"
 }
 
-# ------------------------------------------------------------ qcow2 ---
+# ------------------------------------------------------------ init ---
+
+cmd_init() {
+    need_cmd ssh
+    log "Initialisation de la VM (DHCP + cle SSH)"
+    echo
+    echo "Pre-requis :"
+    echo "  - La VM tourne (make owrt-run)"
+    echo "  - Le mot de passe root est defini (passwd dans la console QEMU)"
+    echo
+    echo "Tu devras taper le mot de passe root pour les premieres commandes."
+    echo
+
+    # 1. Test de connexion
+    echo "--- Test de connexion SSH ---"
+    if ! vm_exec "echo ok" 2>/dev/null; then
+        die "Impossible de joindre la VM sur le port $OWRT_SSH_PORT."
+    fi
+    echo "Connexion OK."
+    echo
+
+    # 2. Configurer DHCP sur l'interface LAN
+    log "Configuration DHCP (reseau QEMU)"
+    local proto
+    proto=$(vm_exec "uci get network.lan.proto" 2>/dev/null || echo "")
+    if [ "$proto" = "dhcp" ]; then
+        echo "Deja en DHCP, on passe."
+    else
+        vm_exec "uci set network.lan.proto='dhcp' && uci commit network"
+        echo "Redemarrage du reseau..."
+        vm_exec "/etc/init.d/network restart" || true
+        # Attendre que le SSH revienne
+        local i=0
+        while ! vm_exec "echo ok" >/dev/null 2>&1; do
+            sleep 1
+            i=$((i + 1))
+            [ "$i" -gt 30 ] && die "Timeout : la VM ne repond plus apres restart reseau"
+        done
+        echo "DHCP configure, reseau OK."
+    fi
+    echo
+
+    # 3. Installer la cle SSH
+    log "Installation de la cle SSH"
+
+    # Trouver ou generer une cle
+    local key=""
+    for f in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+        [ -f "$f" ] && { key="$f"; break; }
+    done
+
+    if [ -z "$key" ]; then
+        echo "Aucune cle SSH trouvee, generation ed25519..."
+        ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N ""
+        key="$HOME/.ssh/id_ed25519.pub"
+    fi
+
+    echo "Cle utilisee : $key"
+
+    # Copier la cle dans dropbear authorized_keys
+    local pubkey
+    pubkey=$(cat "$key")
+
+    if vm_exec "grep -qF \"${pubkey}\" /etc/dropbear/authorized_keys" 2>/dev/null; then
+        echo "Cle deja installee."
+    else
+        vm_exec "mkdir -p /etc/dropbear"
+        echo "$pubkey" | vm_exec "cat >> /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys"
+        echo "Cle ajoutee."
+    fi
+    echo
+
+    # 4. Test final sans mot de passe
+    log "Test connexion sans mot de passe"
+    if vm_exec "echo Init OK" 2>/dev/null; then
+        echo
+        echo "=== Init terminee ==="
+        echo "Les commandes push, pull, setup-user fonctionnent sans mot de passe."
+    else
+        echo
+        echo "ATTENTION : la connexion demande encore un mot de passe."
+        echo "Verifie /etc/dropbear/authorized_keys dans la VM."
+    fi
+}
+
+# --------------------------------------------------------- setup-user ---
+
+cmd_setup_user() {
+    need_cmd ssh openssl
+    local name="${1:-$OWRT_USER_NAME}"
+    local pass="${2:-$OWRT_USER_PASS}"
+    log "Creation du compte ${name}"
+
+    # Verifier si le compte existe deja
+    if vm_exec "grep -q '^${name}:' /etc/passwd" 2>/dev/null; then
+        echo "Compte deja present : ${name}"
+        return 0
+    fi
+
+    # UID/GID : prendre le prochain >= 1000
+    local uid
+    uid=$(vm_exec "awk -F: '\$3>=1000 && \$3<65534{u=\$3} END{print (u?u+1:1000)}' /etc/passwd" 2>/dev/null)
+
+    # Creer l'entree passwd + group
+    vm_exec "echo '${name}:x:${uid}:${uid}:${name}:/home/${name}:/bin/ash' >> /etc/passwd"
+    vm_exec "echo '${name}:x:${uid}:' >> /etc/group"
+
+    # Home directory
+    vm_exec "mkdir -p /home/${name} && chown ${name}:${name} /home/${name}"
+
+    # Mot de passe (openssl cote hote, pas de chpasswd sur BusyBox)
+    local hash
+    hash=$(openssl passwd -1 "$pass")
+    vm_exec "echo '${name}:${hash}:19000:0:99999:7:::' >> /etc/shadow"
+
+    echo "Compte cree : ${name} / ${pass}"
+}
+
+# -------------------------------------------------------------- qcow2 ---
 
 cmd_qcow2() {
     need_cmd qemu-img
@@ -290,7 +379,14 @@ cmd_qcow2() {
 
     log "Conversion en QCOW2 compresse"
     qemu-img convert -c -f raw -O qcow2 "$OWRT_IMG" "$OWRT_QCOW2"
+
     echo "Image QCOW2 : $OWRT_QCOW2 ($(du -h "$OWRT_QCOW2" | cut -f1))"
+    echo
+    echo "Pour tester le boot depuis le QCOW2 :"
+    echo "  qemu-system-x86_64 -m 256 -smp 2 -nographic \\"
+    echo "    -drive file=$OWRT_QCOW2,format=qcow2,if=virtio \\"
+    echo "    -device virtio-net-pci,netdev=lan \\"
+    echo "    -netdev user,id=lan,hostfwd=tcp::${OWRT_SSH_PORT}-:22"
 }
 
 # ------------------------------------------------------------ status ---
@@ -298,9 +394,26 @@ cmd_qcow2() {
 cmd_status() {
     printf '%-14s = %s\n' OWRT_VERSION "$OWRT_VERSION"
     printf '%-14s = %s  [%s]\n' OWRT_IMG "$OWRT_IMG" "$(_state "$OWRT_IMG")"
+    printf '%-14s = %s  [%s]\n' OWRT_QCOW2 "$OWRT_QCOW2" "$(_state "$OWRT_QCOW2")"
     printf '%-14s = %s  [%s]\n' OWRT_SDK "$OWRT_SDK_DIR" "$(_state "$OWRT_SDK_DIR")"
     printf '%-14s = %s\n' SSH_PORT "$OWRT_SSH_PORT"
     printf '%-14s = %s\n' HTTP_PORT "$OWRT_HTTP_PORT"
+
+    # Etat de la VM (si joignable)
+    if vm_exec "echo ok" >/dev/null 2>&1; then
+        printf '%-14s = %s\n' VM "en ligne"
+        local proto
+        proto=$(vm_exec "uci get network.lan.proto" 2>/dev/null || echo "?")
+        printf '%-14s = %s\n' NET_PROTO "$proto"
+        local root_ok
+        root_ok=$(vm_exec "awk -F: '\$1==\"root\" && \$2!=\"\" && \$2!=\"*\" && \$2!=\"!\"{print \"oui\"}' /etc/shadow" 2>/dev/null)
+        printf '%-14s = %s\n' ROOT_PASSWD "${root_ok:-non}"
+        local users
+        users=$(vm_exec "awk -F: '\$3>=1000 && \$3<65534{printf sep \$1; sep=\", \"}' /etc/passwd" 2>/dev/null)
+        printf '%-14s = %s\n' COMPTES "${users:-(aucun)}"
+    else
+        printf '%-14s = %s\n' VM "hors ligne"
+    fi
 }
 
 # ------------------------------------------------------------ clean ---

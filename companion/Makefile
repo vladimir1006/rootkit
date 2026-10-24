@@ -16,9 +16,12 @@ TARGET := companion
 SOURCE := companion.c
 PROTOCOL := ../include/rk2600_protocol.h
 
-.PHONY: all clean test
+.PHONY: all clean test static
 
 all: $(TARGET)
+
+static: LDFLAGS += -static
+static: $(TARGET)
 
 $(TARGET): $(SOURCE) $(PROTOCOL)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(SOURCE) $(LDLIBS)

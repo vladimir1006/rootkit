@@ -4,7 +4,8 @@
 #   make companion         compiler le programme compagnon
 #   make test              tester le compagnon (CLI)
 #   make owrt-run          demarrer la VM OpenWrt
-#   make owrt-setup-user  creer les comptes root + user
+#   make owrt-init         configurer DHCP + cle SSH (1 fois)
+#   make owrt-setup-user  creer le compte utilisateur
 #   make owrt-qcow2        image QCOW2 compressee (livraison)
 #
 # Variables :
@@ -15,9 +16,9 @@ S := ./scripts
 PAUSE_FLAG := $(if $(PAUSE),--pause,)
 
 .DEFAULT_GOAL := help
-.PHONY: help companion test clean-companion \
+.PHONY: help companion companion-static test clean-companion \
         owrt-fetch owrt-resize owrt-sdk owrt-run owrt-ssh \
-        owrt-module owrt-push owrt-pull \
+        owrt-module owrt-push owrt-pull owrt-init \
         owrt-setup-user owrt-qcow2 owrt-status owrt-clean
 
 help: ## Afficher cette aide
@@ -31,6 +32,9 @@ help: ## Afficher cette aide
 
 companion: ## Compiler le programme compagnon
 	@$(MAKE) -C companion $(if $(STRICT),STRICT=1,)
+
+companion-static: ## Compiler le compagnon en statique (pour la VM OpenWrt)
+	@$(MAKE) -C companion static $(if $(STRICT),STRICT=1,)
 
 test: companion ## Tester le compagnon (CLI + limites)
 	@$(MAKE) -C companion STRICT=1 test
@@ -58,14 +62,17 @@ owrt-ssh: ## Se connecter en SSH a la VM OpenWrt
 owrt-module: ## Creer un template de module kernel OpenWrt
 	@$(S)/openwrt.sh module-template
 
+owrt-init: ## Configurer DHCP + cle SSH (a faire une fois apres passwd)
+	@$(S)/openwrt.sh init
+
 owrt-push: ## Envoyer un fichier dans la VM : make owrt-push F=<fichier>
 	@$(S)/openwrt.sh push $(F)
 
 owrt-pull: ## Recuperer un fichier de la VM : make owrt-pull F=<fichier>
 	@$(S)/openwrt.sh pull $(F)
 
-owrt-setup-user: ## Creer le compte utilisateur dans la VM
-	@$(S)/openwrt.sh setup-user
+owrt-setup-user: ## Creer un compte : make owrt-setup-user [U=nom P=pass]
+	@$(S)/openwrt.sh setup-user $(U) $(P)
 
 owrt-qcow2: ## Convertir l'image en QCOW2 compresse (livraison)
 	@$(S)/openwrt.sh qcow2
