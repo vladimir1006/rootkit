@@ -13,6 +13,10 @@
 #   pull <fichier>  recuperer un fichier de la VM via SCP
 #   init            configurer DHCP + cle SSH (a faire une fois)
 #   setup-user      creer le compte utilisateur dans la VM
+#   compile <mod>   compiler un module avec le SDK
+#   insmod <mod>    push + charger un module dans la VM
+#   rmmod <mod>     decharger un module de la VM
+#   clean-module <m> supprimer un module (sources + build)
 #   qcow2           convertir l'image en QCOW2 compresse (livraison)
 #   status          etat du workspace OpenWrt
 #   clean           supprimer image et SDK
@@ -182,193 +186,150 @@ cmd_pull() {
 # -------------------------------------------------------- module-template ---
 
 cmd_module_template() {
-    local dir="${1:-$WORKSPACE/my_owrt_module}"
-    log "Creation du template de module kernel OpenWrt"
+    local name="${1:?usage : $0 module-template <nom>}"
+    local dir="$WORKSPACE/module/${name}"
+    if [ -d "$dir" ]; then
+        die "Le module '${name}' existe deja : $dir"
+    fi
+    log "Creation du module '${name}'"
     mkdir -p "$dir/src"
 
-    cat > "$dir/src/monmodule.c" <<'ENDC'
+    sed "s/MODNAME/${name}/g" > "$dir/src/${name}.c" <<'ENDC'
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Ecole 2600");
-MODULE_DESCRIPTION("Module kernel de test");
+MODULE_DESCRIPTION("MODNAME - module kernel");
 
-static int __init monmodule_init(void)
+static int __init MODNAME_init(void)
 {
-    pr_info("monmodule: charge\n");
+    pr_info("MODNAME: charge\n");
     return 0;
 }
 
-static void __exit monmodule_exit(void)
+static void __exit MODNAME_exit(void)
 {
-    pr_info("monmodule: decharge\n");
+    pr_info("MODNAME: decharge\n");
 }
 
-module_init(monmodule_init);
-module_exit(monmodule_exit);
+module_init(MODNAME_init);
+module_exit(MODNAME_exit);
 ENDC
 
-    cat > "$dir/src/Makefile" <<'ENDM'
-obj-m += monmodule.o
+    sed "s/MODNAME/${name}/g" > "$dir/src/Makefile" <<'ENDM'
+obj-m += MODNAME.o
 ENDM
 
-    cat > "$dir/Makefile" <<'ENDPKG'
+    sed "s/MODNAME/${name}/g" > "$dir/Makefile" <<'ENDPKG'
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
-PKG_NAME:=monmodule
+PKG_NAME:=MODNAME
 PKG_VERSION:=1.0
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
 
-define KernelPackage/monmodule
+define KernelPackage/MODNAME
   SUBMENU:=Other modules
-  TITLE:=Module de test Ecole 2600
-  FILES:=$(PKG_BUILD_DIR)/monmodule.ko
-endef
-
-define KernelPackage/monmodule/description
-  Module kernel de test pour le projet cybersec.
+  TITLE:=MODNAME (Ecole 2600)
+  FILES:=$(PKG_BUILD_DIR)/MODNAME.ko
 endef
 
 define Build/Compile
 	$(KERNEL_MAKE) M=$(PKG_BUILD_DIR) modules
 endef
 
-$(eval $(call KernelPackage,monmodule))
+$(eval $(call KernelPackage,MODNAME))
 ENDPKG
 
-    echo "Template cree : $dir/"
-    echo
-    echo "Pour compiler avec le SDK :"
-    echo "  1. ln -s $dir $OWRT_SDK_DIR/package/monmodule"
-    echo "  2. cd $OWRT_SDK_DIR"
-    echo "  3. make package/monmodule/compile V=s"
-    echo
-    echo "Pour charger dans la VM :"
-    echo "  ./scripts/openwrt.sh push <chemin>/monmodule.ko"
-    echo "  ./scripts/openwrt.sh ssh insmod /tmp/monmodule.ko"
+    echo "Module cree : $dir/"
+    echo "  Compiler : make owrt-compile M=${name}"
+    echo "  Charger  : make owrt-insmod M=${name}"
 }
 
-# ------------------------------------------------------------ init ---
+# ------------------------------------------------------------ compile ---
 
-cmd_init() {
+cmd_compile() {
+    local name="${1:?usage : $0 compile <nom_module>}"
+    local mod_dir="$WORKSPACE/module/${name}"
+    need_file "$mod_dir/Makefile" "module '${name}' introuvable dans module/"
+
+    if [ ! -d "$OWRT_SDK_DIR" ]; then
+        die "SDK absent. Lance d'abord : make owrt-sdk"
+    fi
+
+    # Symlink dans le SDK
+    local link="$OWRT_SDK_DIR/package/${name}"
+    if [ ! -L "$link" ]; then
+        ln -sf "$(realpath "$mod_dir")" "$link"
+        log "Symlink : $link -> $mod_dir"
+    fi
+
+    log "Compilation du module '${name}'"
+    make -C "$OWRT_SDK_DIR" "package/${name}/compile" V=s
+}
+
+# ------------------------------------------------------------- insmod ---
+
+cmd_insmod() {
+    local name="${1:?usage : $0 insmod <nom_module>}"
     need_cmd ssh
-    log "Initialisation de la VM (DHCP + cle SSH)"
-    echo
-    echo "Pre-requis :"
-    echo "  - La VM tourne (make owrt-run)"
-    echo "  - Le mot de passe root est defini (passwd dans la console QEMU)"
-    echo
-    echo "Tu devras taper le mot de passe root pour les premieres commandes."
-    echo
 
-    # 1. Test de connexion
-    echo "--- Test de connexion SSH ---"
-    if ! vm_exec "echo ok" 2>/dev/null; then
-        die "Impossible de joindre la VM sur le port $OWRT_SSH_PORT."
-    fi
-    echo "Connexion OK."
-    echo
-
-    # 2. Configurer DHCP sur l'interface LAN
-    log "Configuration DHCP (reseau QEMU)"
-    local proto
-    proto=$(vm_exec "uci get network.lan.proto" 2>/dev/null || echo "")
-    if [ "$proto" = "dhcp" ]; then
-        echo "Deja en DHCP, on passe."
-    else
-        vm_exec "uci set network.lan.proto='dhcp' && uci commit network"
-        echo "Redemarrage du reseau..."
-        vm_exec "/etc/init.d/network restart" || true
-        # Attendre que le SSH revienne
-        local i=0
-        while ! vm_exec "echo ok" >/dev/null 2>&1; do
-            sleep 1
-            i=$((i + 1))
-            [ "$i" -gt 30 ] && die "Timeout : la VM ne repond plus apres restart reseau"
-        done
-        echo "DHCP configure, reseau OK."
-    fi
-    echo
-
-    # 3. Installer la cle SSH
-    log "Installation de la cle SSH"
-
-    # Trouver ou generer une cle
-    local key=""
-    for f in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
-        [ -f "$f" ] && { key="$f"; break; }
-    done
-
-    if [ -z "$key" ]; then
-        echo "Aucune cle SSH trouvee, generation ed25519..."
-        ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N ""
-        key="$HOME/.ssh/id_ed25519.pub"
+    # Trouver le .ko
+    local ko
+    ko=$(find "$OWRT_SDK_DIR" -name "${name}.ko" 2>/dev/null | head -1)
+    if [ -z "$ko" ]; then
+        die "Fichier ${name}.ko introuvable. Lance d'abord : make owrt-compile M=${name}"
     fi
 
-    echo "Cle utilisee : $key"
-
-    # Copier la cle dans dropbear authorized_keys
-    local pubkey
-    pubkey=$(cat "$key")
-
-    if vm_exec "grep -qF \"${pubkey}\" /etc/dropbear/authorized_keys" 2>/dev/null; then
-        echo "Cle deja installee."
-    else
-        vm_exec "mkdir -p /etc/dropbear"
-        echo "$pubkey" | vm_exec "cat >> /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys"
-        echo "Cle ajoutee."
-    fi
-    echo
-
-    # 4. Test final sans mot de passe
-    log "Test connexion sans mot de passe"
-    if vm_exec "echo Init OK" 2>/dev/null; then
-        echo
-        echo "=== Init terminee ==="
-        echo "Les commandes push, pull, setup-user fonctionnent sans mot de passe."
-    else
-        echo
-        echo "ATTENTION : la connexion demande encore un mot de passe."
-        echo "Verifie /etc/dropbear/authorized_keys dans la VM."
-    fi
+    log "Push + chargement du module '${name}'"
+    vm_scp "$ko" "root@localhost:/tmp/${name}.ko"
+    vm_exec "insmod /tmp/${name}.ko"
+    echo "Module charge. Verifier : dmesg | tail"
 }
 
-# --------------------------------------------------------- setup-user ---
+# -------------------------------------------------------------- rmmod ---
 
-cmd_setup_user() {
-    need_cmd ssh openssl
-    local name="${1:-$OWRT_USER_NAME}"
-    local pass="${2:-$OWRT_USER_PASS}"
-    log "Creation du compte ${name}"
+cmd_rmmod() {
+    local name="${1:?usage : $0 rmmod <nom_module>}"
+    need_cmd ssh
 
-    # Verifier si le compte existe deja
-    if vm_exec "grep -q '^${name}:' /etc/passwd" 2>/dev/null; then
-        echo "Compte deja present : ${name}"
-        return 0
+    log "Dechargement du module '${name}'"
+    vm_exec "rmmod ${name}"
+    echo "Module decharge."
+}
+
+# --------------------------------------------------------- clean-module ---
+
+cmd_clean_module() {
+    local name="${1:?usage : $0 clean-module <nom_module>}"
+    local mod_dir="$WORKSPACE/module/${name}"
+    local link="$OWRT_SDK_DIR/package/${name}"
+    local build="$OWRT_SDK_DIR/build_dir"
+
+    log "Nettoyage du module '${name}'"
+
+    # Supprimer le symlink dans le SDK
+    [ -L "$link" ] && rm -f "$link" && echo "Symlink supprime : $link"
+
+    # Supprimer les artefacts de build
+    local build_found=$(find "$build" -type d -name "${name}" 2>/dev/null)
+    if [ -n "$build_found" ]; then
+        rm -rf $build_found
+        echo "Build supprime"
     fi
 
-    # UID/GID : prendre le prochain >= 1000
-    local uid
-    uid=$(vm_exec "awk -F: '\$3>=1000 && \$3<65534{u=\$3} END{print (u?u+1:1000)}' /etc/passwd" 2>/dev/null)
-
-    # Creer l'entree passwd + group
-    vm_exec "echo '${name}:x:${uid}:${uid}:${name}:/home/${name}:/bin/ash' >> /etc/passwd"
-    vm_exec "echo '${name}:x:${uid}:' >> /etc/group"
-
-    # Home directory
-    vm_exec "mkdir -p /home/${name} && chown ${name}:${name} /home/${name}"
-
-    # Mot de passe (openssl cote hote, pas de chpasswd sur BusyBox)
-    local hash
-    hash=$(openssl passwd -1 "$pass")
-    vm_exec "echo '${name}:${hash}:19000:0:99999:7:::' >> /etc/shadow"
-
-    echo "Compte cree : ${name} / ${pass}"
+    # Supprimer le dossier module
+    if [ -d "$mod_dir" ]; then
+        confirm "Supprimer $mod_dir ?"
+        rm -rf "$mod_dir"
+        echo "Module supprime : $mod_dir"
+    else
+        echo "Dossier $mod_dir introuvable."
+    fi
 }
 
 # -------------------------------------------------------------- qcow2 ---

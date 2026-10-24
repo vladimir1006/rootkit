@@ -19,7 +19,7 @@ PAUSE_FLAG := $(if $(PAUSE),--pause,)
 .PHONY: help companion companion-static test clean-companion \
         owrt-fetch owrt-resize owrt-sdk owrt-run owrt-ssh \
         owrt-module owrt-push owrt-pull owrt-init \
-        owrt-setup-user owrt-qcow2 owrt-status owrt-clean
+        owrt-setup-user owrt-compile owrt-insmod owrt-rmmod owrt-clean-module owrt-qcow2 owrt-status owrt-clean
 
 help: ## Afficher cette aide
 	@echo "Usage : make <cible> [STRICT=1] [PAUSE=1]"
@@ -59,8 +59,20 @@ owrt-run: ## Demarrer OpenWrt dans QEMU (SSH :2222, HTTP :8080)
 owrt-ssh: ## Se connecter en SSH a la VM OpenWrt
 	@$(S)/openwrt.sh ssh
 
-owrt-module: ## Creer un template de module kernel OpenWrt
-	@$(S)/openwrt.sh module-template
+owrt-module: ## Creer un template de module : make owrt-module M=<nom>
+	@$(S)/openwrt.sh module-template $(M)
+
+owrt-compile: ## Compiler un module : make owrt-compile M=<nom>
+	@$(S)/openwrt.sh compile $(M)
+
+owrt-insmod: ## Push + charger un module : make owrt-insmod M=<nom>
+	@$(S)/openwrt.sh insmod $(M)
+
+owrt-rmmod: ## Decharger un module : make owrt-rmmod M=<nom>
+	@$(S)/openwrt.sh rmmod $(M)
+
+owrt-clean-module: ## Supprimer un module : make owrt-clean-module M=<nom>
+	@$(S)/openwrt.sh clean-module $(M)
 
 owrt-init: ## Configurer DHCP + cle SSH (a faire une fois apres passwd)
 	@$(S)/openwrt.sh init
