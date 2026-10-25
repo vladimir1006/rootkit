@@ -21,7 +21,7 @@ PROTOCOL := ../include/rk2600_protocol.h
 all: $(TARGET)
 
 static: LDFLAGS += -static
-static: $(TARGET)
+static: clean $(TARGET)
 
 $(TARGET): $(SOURCE) $(PROTOCOL)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(SOURCE) $(LDLIBS)
