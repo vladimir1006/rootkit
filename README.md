@@ -2,6 +2,12 @@
 
 Projet de rootkit Linux (module noyau) pour le cours Noyau Linux, Ecole 2600.
 
+⚠️ **Cette branche (`feat/openwrt-infra`) ne doit pas être utilisée pour le rendu final.**
+
+Le sujet demande une image QCOW2 contenant un LFS (Linux From Scratch) construit à partir des scripts, dans la continuité du TP01. OpenWrt est une distribution pré-compilée, pas un système construit from scratch — ça ne répond pas à ce critère.
+
+L'infra reste utile comme référence (workflow module, SDK, provisioning VM), mais le rootkit sera développé et livré sur une vraie base LFS.
+
 ## Architecture
 
 ```
@@ -69,10 +75,23 @@ Le protocole est defini dans `include/rk2600_protocol.h`.
 - Comptes : user/user par defaut (`make owrt-setup-user U=nom P=pass`)
 - Quitter QEMU : `Ctrl-A` puis `X`
 
-## A terminer
+## Pourquoi OpenWrt comme cible ?
 
-1. Ecrire le module noyau (`module/`) : syscall hooking, stealth (getdents/read/write), persistance
-2. Creer `/dev/rk2600` au chargement du module (misc_register)
-3. Tester le compagnon avec le module dans la VM
-4. Persistence : script init pour charger le .ko au boot
-5. Documentation et rapport de conception
+On a choisi OpenWrt x86-64 comme environnement de déploiement du rootkit. Ce choix s'inscrit dans un scénario d'attaque réaliste sur un équipement IoT/réseau :
+
+**Pertinence sécurité :**
+- OpenWrt tourne sur des millions de routeurs et points d'accès en production
+- Kernel Linux standard (5.15) avec musl libc et BusyBox — surface d'attaque réduite mais pas de mécanismes de protection avancés
+- Pas de Secure Boot ni de vérification de signature des modules kernel → un attaquant avec un accès root (exploit RCE, firmware supply chain, credentials par défaut) peut charger un LKM sans obstacle
+- C'est exactement le type de cible documenté dans les rapports ANSSI sur les menaces IoT
+
+**Avantages pratiques :**
+- Image légère (~120 Mo) manipulable sous QEMU avec port forwarding SSH
+- SDK officiel pour cross-compiler les modules sans rebuilder le système
+
+
+**Infra mise en place (branche `feat/openwrt-infra`) :**
+- `make owrt-fetch/resize/sdk` — téléchargement et préparation de l'environnement
+- `make owrt-compile/insmod/rmmod M=<nom>` — workflow complet de dev module
+- `make owrt-init/setup-user` — provisioning automatisé de la VM
+- `make owrt-module M=<nom>` — génération de template pour nouveaux modules
