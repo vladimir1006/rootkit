@@ -67,7 +67,13 @@ cmd_fetch() {
 
     local gz="$OWRT_DIR/$OWRT_IMG_GZ"
     if [ ! -f "$gz" ]; then
-        wget -q --show-progress -O "$gz" "${OWRT_BASE_URL}/${OWRT_IMG_GZ}"
+        wget --no-verbose -O "$gz" "${OWRT_BASE_URL}/${OWRT_IMG_GZ}"             || { rm -f "$gz"; die "Echec du telechargement"; }
+    fi
+
+    # Verifier que l'archive est valide avant de decompresser
+    if ! gzip -t "$gz" 2>/dev/null; then
+        rm -f "$gz"
+        die "Archive corrompue (telechargement incomplet ?). Relance : $0 fetch"
     fi
 
     echo "Decompression..."
@@ -342,6 +348,7 @@ cmd_init() {
     echo "Pre-requis :"
     echo "  - La VM tourne (make owrt-run)"
     echo "  - Le mot de passe root est defini (passwd dans la console QEMU)"
+    echo "  - Le reseau est en DHCP (voir ci-dessous si premier lancement)"
     echo
     echo "Tu devras taper le mot de passe root pour les premieres commandes."
     echo
@@ -349,7 +356,18 @@ cmd_init() {
     # 1. Test de connexion
     echo "--- Test de connexion SSH ---"
     if ! vm_exec "echo ok" 2>/dev/null; then
-        die "Impossible de joindre la VM sur le port $OWRT_SSH_PORT."
+        echo
+        echo "SSH inaccessible. Sur une VM neuve, le reseau est en IP statique"
+        echo "(192.168.1.1) incompatible avec QEMU user-mode."
+        echo
+        echo "Dans la console QEMU, tape ces commandes :"
+        echo
+        echo "  uci set network.lan.proto='dhcp'"
+        echo "  uci commit network"
+        echo "  /etc/init.d/network restart"
+        echo
+        echo "Puis relance : make owrt-init"
+        exit 1
     fi
     echo "Connexion OK."
     echo
