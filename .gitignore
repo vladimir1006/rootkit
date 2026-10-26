@@ -7,3 +7,24 @@
 .cursor/
 .gemini/
 .windsurf/
+
+CLAUDE.md
+infra/build/
+infra/busybox/
+infra/disk.img
+infra/initramfs.cpio.gz
+infra/initramfs/
+infra/linux-6.1.188.tar.xz
+infra/linux-6.1.188/
+infra/my_init_loop/
+infra/nfsroot/
+
+# Build du module noyau
+module/*.o
+module/*.ko
+module/*.mod
+module/*.mod.c
+module/.*.cmd
+module/Module.symvers
+module/modules.order
+module/.tmp_versions/

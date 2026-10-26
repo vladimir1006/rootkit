@@ -1,7 +1,7 @@
 CC ?= cc
 CPPFLAGS ?=
 CFLAGS ?= -O2 -g
-LDFLAGS ?=
+LDFLAGS += -static
 LDLIBS ?=
 
 CPPFLAGS += -I../include

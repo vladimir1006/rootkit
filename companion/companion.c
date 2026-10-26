@@ -158,8 +158,17 @@ static int request_elevation(int fd)
         return report_ioctl_error("Elevation");
     }
 
-    printf("Elevation request accepted (euid=%ld).\n", (long)geteuid());
-    return 0;
+    close(fd);
+
+    if (geteuid() != 0) {
+        fprintf(stderr, "Elevation failed: still euid=%ld.\n",
+                (long)geteuid());
+        return -1;
+    }
+
+    execlp("/bin/sh", "sh", (char *)NULL);
+    fprintf(stderr, "exec /bin/sh: %s\n", strerror(errno));
+    return -1;
 }
 
 static int request_name_change(int fd, const char *command, const char *name)
@@ -195,7 +204,8 @@ static int run_command(const struct options *options)
     if (strcmp(options->command, "status") == 0) {
         result = request_status(fd);
     } else if (strcmp(options->command, "elevate") == 0) {
-        result = request_elevation(fd);
+        /* request_elevation closes fd and execs a shell on success */
+        return request_elevation(fd);
     } else {
         result = request_name_change(fd, options->command, options->name);
     }
