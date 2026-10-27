@@ -2,7 +2,7 @@
 
 set -eu
 
-program=${1:-./companion}
+program=${1:-./rk2600}
 temporary_directory=$(mktemp -d)
 trap 'rm -rf "$temporary_directory"' EXIT HUP INT TERM
 
@@ -35,9 +35,12 @@ expect_exit 2 'status rejects extra arguments' status extra
 expect_exit 2 'hide requires a name' hide
 expect_exit 2 'hide rejects an empty name' hide ''
 expect_exit 2 'hide rejects a path' hide ../secret
+expect_exit 2 'privesc rejects extra arguments' privesc extra
+expect_exit 2 'install rejects too many arguments' install a b
+expect_exit 2 'uninstall rejects arguments' uninstall extra
 
-missing_device="$temporary_directory/no-device"
-expect_exit 1 'missing device is reported' --device "$missing_device" status
+# Without the device present, commands that open it must fail with exit 1
+expect_exit 1 'status fails without device' status
 grep -q 'Cannot open' "$temporary_directory/stderr" || \
     fail 'missing-device error is printed'
 

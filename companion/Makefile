@@ -12,7 +12,7 @@ ifeq ($(STRICT),1)
 CFLAGS += -Werror
 endif
 
-TARGET := companion
+TARGET := rk2600
 SOURCE := companion.c
 PROTOCOL := ../include/rk2600_protocol.h
 

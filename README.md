@@ -22,4 +22,17 @@ Pour compiler et tester le compagnon sous WSL, lancez `make -C companion STRICT=
 4. Convertir le disque raw en QCOW2 compressé avec `qemu-img convert -c -O qcow2 disk.img disk.qcow2`, puis vérifier que l'image démarre dans QEMU.
 5. Compléter la documentation utilisateur et le rapport de conception avec la répartition des tâches.
 
+## Persistance au redémarrage
+
+Le module se recharge automatiquement au boot via un script `/etc/local.d/snd-compat.start` (service `local` d'OpenRC). La commande `rk2600 install` met en place ce mécanisme :
+
+1. Copie `rk2600.ko` dans `/lib/modules/<version>/extra/`
+2. Crée `/etc/local.d/snd-compat.start` qui exécute `insmod` au boot
+3. Supprime les traces console (printk silencieux + `dmesg -c`)
+4. Charge le module immédiatement
+
+Le service `local` doit être activé dans la VM : `rc-update add local default`.
+
+À l'initialisation, le module cache automatiquement `snd-compat.start`, `rk2600.ko` et `rk2600` des listings de répertoires, puis disparaît de `lsmod` et `/sys/module/`.
+
 Le Makefile racine appelle les scripts de `infra/scripts/`.

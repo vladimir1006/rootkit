@@ -16,7 +16,7 @@ PAUSE_FLAG := $(if $(PAUSE),--pause,)
 .PHONY: help status deps kernel kernel-debug config clean-kernel mrproper \
         rootfs busybox initramfs nfsroot nfs-server \
         disk disk-image disk-alpine disk-grub mount umount \
-        run run-nfs run-disk gdb module clean-module all
+        run run-nfs run-disk gdb module companion clean-module clean-companion all
 
 help: ## Afficher cette aide
 	@echo "Usage : make <cible> [PROFILE=base|debug] [PAUSE=1]"
@@ -91,8 +91,14 @@ umount: ## Démonter disk.img
 module: ## Compiler le module noyau rk2600.ko
 	@$(MAKE) -C module KDIR=$(CURDIR)/infra/build
 
+companion: ## Compiler l'outil companion rk2600
+	@$(MAKE) -C companion
+
 clean-module: ## Nettoyer le module noyau
 	@$(MAKE) -C module KDIR=$(CURDIR)/infra/build clean
+
+clean-companion: ## Nettoyer le companion
+	@$(MAKE) -C companion clean
 
 # ---------------------------------------------------------------- QEMU -----
 
@@ -108,4 +114,4 @@ run-disk: ## Démarrer sur l'image disque (GRUB)
 gdb: ## Lancer GDB et se connecter à la VM en attente
 	@$(S)/run.sh gdb
 
-all: kernel rootfs module ## Tout compiler (noyau + rootfs + module)
+all: kernel rootfs module companion ## Tout compiler (noyau + rootfs + module + companion)
