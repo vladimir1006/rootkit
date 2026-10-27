@@ -1,0 +1,10 @@
+# Artefacts de build Kbuild
+*.o
+*.ko
+*.mod
+*.mod.c
+*.symvers
+*.order
+.tmp_versions/
+.*.cmd
+.cache.mk

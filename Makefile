@@ -100,4 +100,9 @@ run-disk: ## Démarrer sur l'image disque (GRUB)
 gdb: ## Lancer GDB et se connecter à la VM en attente
 	@$(S)/run.sh gdb
 
+module: ## Compiler le module noyau rk2600 (LKM)
+	@$(MAKE) -C src/kernel_module
+
 all: kernel rootfs ## Tout compiler (noyau + rootfs)
+
+
