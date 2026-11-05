@@ -89,6 +89,7 @@ cmd_image() {
 cmd_alpine() {
     not_in_docker
     [ -n "$ROOT_PASSWORD" ] || die "définis ROOT_PASSWORD avant de construire Alpine"
+    [ -n "$USER_PASSWORD" ] || die "définis USER_PASSWORD avant de construire Alpine"
     need_cmd docker
     log "Peuplement du rootfs avec Alpine"
     attach
@@ -96,7 +97,9 @@ cmd_alpine() {
 
     # Tout le paramétrage Alpine en un seul conteneur, sans interaction
     $SUDO docker run --rm -v "$MNT_DIR:/my-rootfs" \
-        -e "ROOT_PASSWORD=$ROOT_PASSWORD" "$ALPINE_IMAGE" sh -euc '
+        -e "ROOT_PASSWORD=$ROOT_PASSWORD" \
+        -e "USER_PASSWORD=$USER_PASSWORD" \
+        "$ALPINE_IMAGE" sh -euc '
         apk add --no-cache openrc util-linux build-base
         apk add --no-cache openrc util-linux build-base
         # Installe les deps pour miniedr
@@ -109,6 +112,10 @@ cmd_alpine() {
         rc-update add root default
 
         echo "root:$ROOT_PASSWORD" | chpasswd
+
+        # Compte user pour la démonstration du rootkit
+        adduser -D -s /bin/sh user
+        echo "user:$USER_PASSWORD" | chpasswd
 
         # Pseudo-systemes de fichiers montes au demarrage
         rc-update add devfs boot
@@ -125,7 +132,7 @@ cmd_alpine() {
 Ecole 2600 linux \r (\l)
 
 END
-    echo "Rootfs Alpine installé (root / $ROOT_PASSWORD)"
+    echo "Rootfs Alpine installé (root / $ROOT_PASSWORD, user / $USER_PASSWORD)"
 }
 
 cmd_grub() {

@@ -13,6 +13,10 @@
 [ -n "${COMMON_SH:-}" ] && return 0
 COMMON_SH=1
 
+# Les outils disque (parted, losetup, mkfs.*) sont dans /sbin et /usr/sbin
+# qui ne sont pas toujours dans le PATH de l'utilisateur courant.
+export PATH="/sbin:/usr/sbin:$PATH"
+
 # ---------------------------------------------------------------- chemins ---
 
 # WORKSPACE = le parent de scripts/, calculé depuis CE fichier
@@ -46,6 +50,7 @@ DISK_SIZE="${DISK_SIZE:-1G}"
 MNT_DIR="${MNT_DIR:-/tmp/my-rootfs}"
 ALPINE_IMAGE="${ALPINE_IMAGE:-alpine}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
+USER_PASSWORD="${USER_PASSWORD:-}"
 
 QEMU_MEM="${QEMU_MEM:-512M}"
 QEMU_GDB_PORT="${QEMU_GDB_PORT:-1234}"
