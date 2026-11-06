@@ -24,6 +24,25 @@ export PATH="/sbin:/usr/sbin:$PATH"
 _COMMON_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 WORKSPACE="${WORKSPACE:-$(dirname "$_COMMON_DIR")}"
 
+# Charger .env si présent (mots de passe LFS, surcharges locales).
+# Le fichier est cherché à la racine du dépôt (parent de infra/).
+# Les variables définies ici servent de défaut : une valeur passée en ligne
+# de commande (ex. ROOT_PASSWORD=zzz make disk) reste prioritaire.
+_REPO_ROOT="$(dirname "$WORKSPACE")"
+if [ -f "$_REPO_ROOT/.env" ]; then
+    while IFS='=' read -r _k _v || [ -n "$_k" ]; do
+        case "$_k" in
+            ''|\#*) continue ;;
+            *[!A-Za-z_0-9]*) continue ;;
+        esac
+        # ${VAR:=default} : définit VAR seulement si VAR est nulle ou absente
+        eval ": \"\${$_k:=\$_v}\""
+        eval "export $_k"
+    done < "$_REPO_ROOT/.env"
+    unset _k _v
+fi
+unset _REPO_ROOT
+
 KERNEL_VERSION="${KERNEL_VERSION:-6.1.188}"
 KERNEL_URL="${KERNEL_URL:-https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz}"
 KERNEL_SRC="${KERNEL_SRC:-$WORKSPACE/linux-${KERNEL_VERSION}}"
