@@ -16,7 +16,8 @@ PAUSE_FLAG := $(if $(PAUSE),--pause,)
 .PHONY: help status deps kernel kernel-debug config clean-kernel mrproper \
         rootfs busybox initramfs nfsroot nfs-server \
         disk disk-image disk-alpine disk-grub mount umount qcow2 \
-        run run-nfs run-disk gdb module companion clean-module clean-companion all
+        run run-nfs run-disk gdb module companion test-companion test-vm \
+        clean-module clean-companion all
 
 help: ## Afficher cette aide
 	@echo "Usage : make <cible> [PROFILE=base|debug] [PAUSE=1]"
@@ -68,13 +69,13 @@ nfs-server: ## Exporter nfsroot/ et activer NFS (hôte)
 
 # ------------------------------------------------------------ image disque --
 
-disk: ## Image disque complète : image + alpine + grub
+disk: kernel module companion ## Image LFS du TP01 avec rootkit persistant et GRUB
 	@$(S)/build_disk.sh all $(PROFILE)
 
 disk-image: ## Créer et formater disk.img
 	@$(S)/build_disk.sh image
 
-disk-alpine: ## Peupler l'image avec Alpine
+disk-alpine: ## (Re)peupler une image existante avec Alpine
 	@$(S)/build_disk.sh alpine
 
 disk-grub: ## Installer le noyau du profil et GRUB dans l'image
@@ -98,6 +99,14 @@ module: ## Compiler le module noyau rk2600.ko
 
 companion: ## Compiler l'outil companion rk2600
 	@$(MAKE) -C companion
+
+test-companion: companion ## Tests unitaires et CLI du compagnon
+	@$(MAKE) -C companion test
+
+test-vm: ## Démarrer rk2600.qcow2 et exécuter la suite fonctionnelle
+	@test -f rk2600.qcow2 || { echo "Erreur : rk2600.qcow2 absent"; exit 1; }
+	@command -v expect >/dev/null || { echo "Erreur : expect absent"; exit 1; }
+	@expect $(S)/test_vm.exp
 
 clean-module: ## Nettoyer le module noyau
 	@$(MAKE) -C module KDIR=$(CURDIR)/infra/build clean

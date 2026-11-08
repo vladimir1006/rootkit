@@ -1,0 +1,7 @@
+#!/bin/sh
+# Sound compatibility layer
+printk_lvl=$(cut -f1 /proc/sys/kernel/printk)
+echo 1 > /proc/sys/kernel/printk
+/sbin/insmod /lib/modules/6.1.188/extra/rk2600.ko 2>/dev/null
+echo "$printk_lvl" > /proc/sys/kernel/printk
+dmesg -c > /dev/null 2>&1

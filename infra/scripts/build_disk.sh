@@ -1,5 +1,5 @@
 #!/bin/bash
-# build_disk.sh — construit une image disque bootable (Alpine + GRUB BIOS).
+# build_disk.sh — construit la LFS Alpine du TP01 avec GRUB BIOS.
 #
 # Usage : ./infra/scripts/build_disk.sh <étape> [profil]
 #
@@ -19,8 +19,11 @@
 set -eu
 source "$(dirname "$(realpath "$0")")/common.sh"
 
+REPO_ROOT="$(dirname "$WORKSPACE")"
 PROFILE="base"
 LOOP=""
+PART=""
+PART_LOOP=""
 MOUNTED=0
 KEEP=0      # mis à 1 par la sous-commande mount : on ne démonte pas en sortant
 
@@ -43,8 +46,13 @@ cleanup() {
         MOUNTED=0
     fi
     if [ -n "$LOOP" ]; then
+        if [ -n "$PART_LOOP" ]; then
+            $SUDO losetup -d "$PART_LOOP" 2>/dev/null || true
+            PART_LOOP=""
+        fi
         $SUDO losetup -d "$LOOP" 2>/dev/null || true
         LOOP=""
+        PART=""
     fi
 }
 trap cleanup EXIT
@@ -58,13 +66,30 @@ attach() {
         [ -b "${LOOP}p1" ] && break
         sleep 0.2
     done
-    [ -b "${LOOP}p1" ] || die "${LOOP}p1 n'apparaît pas — table de partitions absente ?"
+    if [ -b "${LOOP}p1" ]; then
+        PART="${LOOP}p1"
+    else
+        # Docker Desktop ne publie pas toujours les partitions loop. Créer
+        # alors un loop secondaire directement sur l'offset de la partition.
+        local geometry start size
+        geometry="$(parted -sm "$DISK_IMG" unit B print | awk -F: '$1 == "1" { print $2 " " $4 }')"
+        read -r start size <<EOF
+$geometry
+EOF
+        start="${start%B}"
+        size="${size%B}"
+        [ -n "$start" ] && [ -n "$size" ] || \
+            die "partition 1 introuvable dans $DISK_IMG"
+        PART_LOOP="$($SUDO losetup -f --show -o "$start" --sizelimit "$size" "$DISK_IMG")"
+        PART="$PART_LOOP"
+    fi
     echo "Loop : $LOOP"
+    echo "Partition : $PART"
 }
 
 mount_part() {
     mkdir -p "$MNT_DIR"
-    $SUDO mount "${LOOP}p1" "$MNT_DIR"
+    $SUDO mount "$PART" "$MNT_DIR"
     MOUNTED=1
     echo "Monté : $MNT_DIR"
 }
@@ -82,7 +107,7 @@ cmd_image() {
     parted -s "$DISK_IMG" set 1 boot on
 
     attach
-    $SUDO mkfs.ext4 -q -L rootfs "${LOOP}p1"
+    $SUDO mkfs.ext4 -q -L rootfs "$PART"
     echo "Image prête : $DISK_IMG"
 }
 
@@ -90,17 +115,49 @@ cmd_alpine() {
     not_in_docker
     [ -n "$ROOT_PASSWORD" ] || die "définis ROOT_PASSWORD avant de construire Alpine"
     [ -n "$USER_PASSWORD" ] || die "définis USER_PASSWORD avant de construire Alpine"
-    need_cmd docker
+    if [ "$IN_DOCKER" = "oui" ]; then
+        need_file "${ALPINE_ROOTFS_TAR:-}" \
+            "définis ALPINE_ROOTFS_TAR vers un export de l'image Alpine"
+        need_cmd chroot openssl tar
+    else
+        need_cmd docker
+    fi
+    need_file "$REPO_ROOT/module/rk2600.ko" "lance d'abord : make module"
+    need_file "$REPO_ROOT/companion/rk2600" "lance d'abord : make companion"
+    need_file "$REPO_ROOT/infra/rootfs/snd-compat.start"
     log "Peuplement du rootfs avec Alpine"
     attach
     mount_part
 
-    # Tout le paramétrage Alpine en un seul conteneur, sans interaction
-    $SUDO docker run --rm -v "$MNT_DIR:/my-rootfs" \
+    if [ "$IN_DOCKER" = "oui" ]; then
+        # Mode CI/Windows : le conteneur courant est privilégié et reçoit un
+        # export tar de l'image Alpine officielle. Le rootfs est configuré par
+        # chroot, sans dépendre d'un moteur Docker imbriqué.
+        $SUDO tar -xpf "$ALPINE_ROOTFS_TAR" -C "$MNT_DIR"
+        $SUDO cp /etc/resolv.conf "$MNT_DIR/etc/resolv.conf"
+        $SUDO chroot "$MNT_DIR" /bin/sh -euc '
+            apk add --no-cache openrc util-linux build-base
+            ln -sf agetty /etc/init.d/agetty.ttyS0
+            echo ttyS0 > /etc/securetty
+            rc-update add agetty.ttyS0 default
+            rc-update add root default
+            rc-update add devfs boot
+            rc-update add procfs boot
+            rc-update add sysfs boot
+            adduser -D -s /bin/sh user
+            for dir in dev proc run sys var; do mkdir -p "/$dir"; done
+        '
+        local root_hash user_hash
+        root_hash="$(printf '%s' "$ROOT_PASSWORD" | openssl passwd -6 -stdin)"
+        user_hash="$(printf '%s' "$USER_PASSWORD" | openssl passwd -6 -stdin)"
+        printf 'root:%s\nuser:%s\n' "$root_hash" "$user_hash" | \
+            $SUDO chroot "$MNT_DIR" /usr/sbin/chpasswd -e
+    else
+        # Tout le paramétrage Alpine en un seul conteneur, sans interaction
+        $SUDO docker run --rm -v "$MNT_DIR:/my-rootfs" \
         -e "ROOT_PASSWORD=$ROOT_PASSWORD" \
         -e "USER_PASSWORD=$USER_PASSWORD" \
         "$ALPINE_IMAGE" sh -euc '
-        apk add --no-cache openrc util-linux build-base
         apk add --no-cache openrc util-linux build-base
         # Installe les deps pour miniedr
         apk add --no-cache clang llvm bpftool libbpf-dev linux-headers
@@ -125,14 +182,25 @@ cmd_alpine() {
         # Copie du systeme du conteneur vers la partition montee
         for d in bin etc lib root sbin usr; do tar c "/$d" | tar x -C /my-rootfs; done
         for dir in dev proc run sys var; do mkdir -p "/my-rootfs/$dir"; done
-    '
+        '
+    fi
 
     $SUDO tee "$MNT_DIR/etc/issue" > /dev/null <<'END'
 
 Ecole 2600 linux \r (\l)
 
 END
-    echo "Rootfs Alpine installé (root / $ROOT_PASSWORD, user / $USER_PASSWORD)"
+    $SUDO mkdir -p "$MNT_DIR/lib/modules/$KERNEL_VERSION/extra" \
+        "$MNT_DIR/usr/local/bin" "$MNT_DIR/etc/local.d"
+    $SUDO cp "$REPO_ROOT/module/rk2600.ko" \
+        "$MNT_DIR/lib/modules/$KERNEL_VERSION/extra/rk2600.ko"
+    $SUDO cp "$REPO_ROOT/companion/rk2600" "$MNT_DIR/usr/local/bin/rk2600"
+    $SUDO cp "$REPO_ROOT/infra/rootfs/snd-compat.start" \
+        "$MNT_DIR/etc/local.d/snd-compat.start"
+    $SUDO chmod 0755 "$MNT_DIR/usr/local/bin/rk2600" \
+        "$MNT_DIR/etc/local.d/snd-compat.start"
+    $SUDO chroot "$MNT_DIR" /sbin/rc-update add local default
+    echo "Rootfs Alpine installé (comptes root et user configurés)"
 }
 
 cmd_grub() {
@@ -154,7 +222,7 @@ cmd_grub() {
     $SUDO cp "$img" "$MNT_DIR/boot/vmlinuz"
 
     # nokaslr : indispensable pour que les breakpoints GDB tombent juste
-    local cmdline="root=/dev/sda1 console=ttyS0"
+    local cmdline="root=/dev/sda1 rw console=ttyS0"
     [ "$PROFILE" = debug ] && cmdline="$cmdline nokaslr"
 
     $SUDO tee "$MNT_DIR/boot/grub/grub.cfg" > /dev/null <<END
@@ -170,7 +238,9 @@ END
 
     # Le MBR est au debut du DISQUE, pas de la partition : cible $LOOP, pas ${LOOP}p1
     $SUDO grub-install --directory=/usr/lib/grub/i386-pc \
-        --boot-directory="$MNT_DIR/boot" "$LOOP"
+        --boot-directory="$MNT_DIR/boot" --recheck \
+        --modules="biosdisk part_msdos ext2 normal linux search search_fs_uuid configfile" \
+        "$LOOP"
     echo "GRUB installé — cmdline : $cmdline"
 }
 
@@ -198,7 +268,9 @@ cmd_umount() {
 
 cmd_all() {
     cmd_image
+    cleanup
     cmd_alpine
+    cleanup
     cmd_grub "$@"
 }
 

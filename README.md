@@ -10,7 +10,7 @@ rootkit/
 ├── include/rk2600_protocol.h   # ABI partagee kernel/userspace (ioctl)
 ├── module/rk2600.c             # Module noyau (hooks ftrace, VFS, stealth)
 ├── companion/companion.c       # CLI compagnon (status, privesc, hide, test)
-├── infra/scripts/              # Build kernel, rootfs Alpine, image disque
+├── infra/scripts/              # Build kernel, LFS Alpine du TP01, image disque
 ├── docs/USER.md                # Guide utilisateur complet
 └── Makefile                    # Cibles principales
 ```
@@ -38,9 +38,13 @@ rootkit/
 ```sh
 make module          # compile rk2600.ko (cross-compile vers 6.1.188)
 make companion       # compile le binaire statique companion
-make disk            # image disque Alpine + GRUB
+make disk            # LFS du TP01 : Alpine minimal + OpenRC + GRUB
 make qcow2           # convertit en QCOW2 compresse (livrable)
 ```
+
+Dans la terminologie du TP01, le disque LFS obligatoire est le système Alpine
+minimal installé sur ext4 avec OpenRC et GRUB. Le rootfs BusyBox reste réservé
+aux cibles de développement `initramfs` et `nfsroot`.
 
 ## Lancement
 

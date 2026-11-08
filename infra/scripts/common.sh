@@ -35,6 +35,7 @@ if [ -f "$_REPO_ROOT/.env" ]; then
             ''|\#*) continue ;;
             *[!A-Za-z_0-9]*) continue ;;
         esac
+	_v="${_v%$'\r'}"
         # ${VAR:=default} : définit VAR seulement si VAR est nulle ou absente
         eval ": \"\${$_k:=\$_v}\""
         eval "export $_k"
@@ -141,7 +142,9 @@ warn_if_outdated() {
 }
 
 not_in_docker() {
-    [ "$IN_DOCKER" = "non" ] || die "à lancer sur l'hôte, pas dans Docker"
+    [ "$IN_DOCKER" = "non" ] || \
+        [ "${ALLOW_PRIVILEGED_DISK_BUILD:-0}" = 1 ] || \
+        die "à lancer sur l'hôte, ou dans un conteneur privilégié avec ALLOW_PRIVILEGED_DISK_BUILD=1"
 }
 
 # confirm "Écraser disk.img ?" — refuse par défaut, et hors terminal
