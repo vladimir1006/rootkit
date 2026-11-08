@@ -45,15 +45,19 @@ cleanup() {
         $SUDO umount "$MNT_DIR" 2>/dev/null || true
         MOUNTED=0
     fi
-    if [ -n "$LOOP" ]; then
-        if [ -n "$PART_LOOP" ]; then
-            $SUDO losetup -d "$PART_LOOP" 2>/dev/null || true
-            PART_LOOP=""
-        fi
-        $SUDO losetup -d "$LOOP" 2>/dev/null || true
-        LOOP=""
-        PART=""
+    if [ -n "$PART_LOOP" ]; then
+        $SUDO losetup -d "$PART_LOOP" 2>/dev/null || true
+        PART_LOOP=""
     fi
+    # Détache tous les loops liés à $DISK_IMG, pas seulement $LOOP :
+    # un loop périmé d'un run précédent corromprait GRUB au suivant.
+    local loops l
+    loops="$($SUDO losetup -j "$DISK_IMG" -O NAME -n 2>/dev/null || true)"
+    for l in $loops; do
+        $SUDO losetup -d "$l" 2>/dev/null || true
+    done
+    LOOP=""
+    PART=""
 }
 trap cleanup EXIT
 
@@ -89,6 +93,11 @@ EOF
 
 mount_part() {
     mkdir -p "$MNT_DIR"
+    if mountpoint -q "$MNT_DIR" 2>/dev/null; then
+        MOUNTED=1
+        echo "Déjà monté : $MNT_DIR"
+        return 0
+    fi
     $SUDO mount "$PART" "$MNT_DIR"
     MOUNTED=1
     echo "Monté : $MNT_DIR"
