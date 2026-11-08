@@ -195,8 +195,9 @@ cmd_alpine() {
         rc-update add sysfs boot
 
         # Copie du systeme du conteneur vers la partition montee
-        for d in bin etc lib root sbin usr; do tar c "/$d" | tar x -C /my-rootfs; done
-        for dir in dev proc run sys var; do mkdir -p "/my-rootfs/$dir"; done
+        for d in bin etc home lib root sbin usr; do tar c "/$d" | tar x -C /my-rootfs; done
+        for dir in dev proc run sys tmp var; do mkdir -p "/my-rootfs/$dir"; done
+        chmod 1777 /my-rootfs/tmp
         '
     fi
 
