@@ -116,10 +116,7 @@ cmd_alpine() {
         -e "ROOT_PASSWORD=$ROOT_PASSWORD" \
         -e "USER_PASSWORD=$USER_PASSWORD" \
         "$ALPINE_IMAGE" sh -euc '
-        apk add --no-cache openrc util-linux build-base
-        apk add --no-cache openrc util-linux build-base
-        # Installe les deps pour miniedr
-        apk add --no-cache clang llvm bpftool libbpf-dev linux-headers
+        apk add --no-cache openrc util-linux
 
         # Console sur le port série : c est par la que QEMU nous parle
         ln -sf agetty /etc/init.d/agetty.ttyS0
