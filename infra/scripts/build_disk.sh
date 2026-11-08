@@ -63,7 +63,15 @@ trap cleanup EXIT
 
 attach() {
     need_file "$DISK_IMG" "lance d'abord : $0 image"
-    LOOP="$($SUDO losetup -Pf --show "$DISK_IMG")"
+    # Réutilise un loop device existant pour éviter la corruption
+    # liée aux caches incohérents entre plusieurs loop devices.
+    local existing
+    existing="$($SUDO losetup -j "$DISK_IMG" -O NAME -n 2>/dev/null | head -1)"
+    if [ -n "$existing" ]; then
+        LOOP="$existing"
+    else
+        LOOP="$($SUDO losetup -Pf --show "$DISK_IMG")"
+    fi
     # udev met un instant à créer loopXp1
     local i
     for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -145,7 +153,7 @@ cmd_alpine() {
         $SUDO tar -xpf "$ALPINE_ROOTFS_TAR" -C "$MNT_DIR"
         $SUDO cp /etc/resolv.conf "$MNT_DIR/etc/resolv.conf"
         $SUDO chroot "$MNT_DIR" /bin/sh -euc '
-            apk add --no-cache openrc util-linux build-base
+            apk add --no-cache openrc util-linux
             ln -sf agetty /etc/init.d/agetty.ttyS0
             echo ttyS0 > /etc/securetty
             rc-update add agetty.ttyS0 default
@@ -167,9 +175,7 @@ cmd_alpine() {
         -e "ROOT_PASSWORD=$ROOT_PASSWORD" \
         -e "USER_PASSWORD=$USER_PASSWORD" \
         "$ALPINE_IMAGE" sh -euc '
-        apk add --no-cache openrc util-linux build-base
-        # Installe les deps pour miniedr
-        apk add --no-cache clang llvm bpftool libbpf-dev linux-headers
+        apk add --no-cache openrc util-linux
 
         # Console sur le port série : c est par la que QEMU nous parle
         ln -sf agetty /etc/init.d/agetty.ttyS0
