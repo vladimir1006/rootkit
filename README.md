@@ -1,38 +1,66 @@
-# Projet rootkit Linux
+# rk2600 — Rootkit LKM Linux
 
-Projet de laboratoire en VM QEMU. Le dépôt contient des scripts de compilation
-du noyau, des rootfs BusyBox, une image disque Alpine avec GRUB, un protocole
-ioctl partagé et un programme compagnon.
+Rootkit sous forme de module noyau (LKM) pour Linux 6.1.188, developpe dans le
+cadre du cours de securite des systemes d'exploitation (Ecole 2600, M1).
 
-## État actuel
+## Architecture
 
-- `companion/` contient la CLI, son Makefile, les tests d'arguments et le guide utilisateur. Le client envoie ses requêtes à `/dev/rk2600`.
-- `include/rk2600_protocol.h` définit les commandes ioctl et les structures partagées avec le module.
-- `infra/scripts/` contient les scripts de compilation du noyau, de BusyBox, des rootfs et de l'image disque.
-- L'image disque générée utilise Alpine et le format raw. Les fichiers du module noyau ne sont pas encore présents dans ce dépôt.
-- La construction de l'image Alpine exige `ROOT_PASSWORD`, fourni dans l'environnement.
+```
+rootkit/
+├── include/rk2600_protocol.h   # ABI partagee kernel/userspace (ioctl)
+├── module/rk2600.c             # Module noyau (hooks ftrace, VFS, stealth)
+├── companion/companion.c       # CLI compagnon (status, privesc, hide, test)
+├── infra/scripts/              # Build kernel, rootfs Alpine, image disque
+├── docs/USER.md                # Guide utilisateur complet
+└── Makefile                    # Cibles principales
+```
 
-Pour compiler et tester le compagnon sous WSL, lancez `make -C companion STRICT=1 test`.
+## Fonctionnalites
 
-## À terminer pour le rendu
+| Fonctionnalite | Technique |
+|---|---|
+| Hook syscalls (read, write, sendfile64) | ftrace + kprobe (`kallsyms_lookup_name`) |
+| Module hiding | `list_del_init` sur `THIS_MODULE->list` |
+| File hiding (/, /proc, /dev) | Patch `iterate_shared` (CR0 WP bypass) + filldir unifie |
+| Privilege escalation | `prepare_kernel_cred(NULL)` + `commit_creds` via ioctl |
+| Persistance | Script OpenRC `/etc/local.d/snd-compat.start` |
+| Read filter | Suppression des lignes insmod/rk2600 du script de persistance |
+| Write stealth | Ecriture simulee (retourne count sans ecrire) |
+| Hide/unhide dynamique | Liste chainee protegee par spinlock, via ioctl ou `/proc/.rk` |
 
-1. Construire la véritable LFS demandée, avec les comptes `root` et `user`.
-2. Écrire et intégrer le module noyau. Confirmer avec son auteur les numéros ioctl, les structures et la version définis dans `include/rk2600_protocol.h`.
-3. Créer `/dev/rk2600`, régler ses permissions, puis tester le compagnon avec le module chargé dans la VM. Les tests actuels ne vérifient pas les réponses réelles du module.
-4. Convertir le disque raw en QCOW2 compressé avec `qemu-img convert -c -O qcow2 disk.img disk.qcow2`, puis vérifier que l'image démarre dans QEMU.
-5. Compléter la documentation utilisateur et le rapport de conception avec la répartition des tâches.
+## Interfaces de controle
 
-## Persistance au redémarrage
+- **ioctl** via `/dev/.rk_ctl` (mode 0666, accessible sans root)
+- **proc** via `/proc/.rk` (write-only : `+name`, `-name`, `hide`, `unhide`, `flush`)
 
-Le module se recharge automatiquement au boot via un script `/etc/local.d/snd-compat.start` (service `local` d'OpenRC). La commande `rk2600 install` met en place ce mécanisme :
+## Compilation
 
-1. Copie `rk2600.ko` dans `/lib/modules/<version>/extra/`
-2. Crée `/etc/local.d/snd-compat.start` qui exécute `insmod` au boot
-3. Supprime les traces console (printk silencieux + `dmesg -c`)
-4. Charge le module immédiatement
+```sh
+make module          # compile rk2600.ko (cross-compile vers 6.1.188)
+make companion       # compile le binaire statique companion
+make disk            # image disque Alpine + GRUB
+make qcow2           # convertit en QCOW2 compresse (livrable)
+```
 
-Le service `local` doit être activé dans la VM : `rc-update add local default`.
+## Lancement
 
-À l'initialisation, le module cache automatiquement `snd-compat.start`, `rk2600.ko` et `rk2600` des listings de répertoires, puis disparaît de `lsmod` et `/sys/module/`.
+```sh
+make run-disk        # boot GRUB sur l'image disque
+```
 
-Le Makefile racine appelle les scripts de `infra/scripts/`.
+## Usage rapide dans la VM
+
+```sh
+./rk2600 install rk2600.ko    # installe + persistance + charge
+./rk2600 status                # API version + module hidden
+./rk2600 privesc               # shell root depuis user
+./rk2600 hide <name>           # masque une entree de repertoire
+./rk2600 test                  # suite de tests automatisee (12 tests)
+```
+
+## Comptes
+
+| Compte | Mot de passe |
+|---|---|
+| `root` | voir `.env` |
+| `user` | voir `.env` |

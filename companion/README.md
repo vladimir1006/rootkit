@@ -1,52 +1,66 @@
-# Programme compagnon
+# rk2600 — Programme compagnon
 
-Le compagnon est le client en espace utilisateur du projet. Il valide la
-commande, ouvre `/dev/rk2600` et envoie une requête ioctl au module. Il ne crée
-pas le périphérique et ne remplace pas le module noyau.
+Client en espace utilisateur du rootkit rk2600. Communique avec le module noyau
+via ioctl sur `/dev/.rk_ctl`.
+
+## Compilation
+
+```sh
+make companion       # depuis la racine du depot
+make -C companion    # depuis n'importe ou
+```
+
+Produit un binaire statique `companion/rk2600` (x86_64, lie avec musl).
 
 ## Commandes
 
-La syntaxe complète s'affiche avec `./companion --help`. Les commandes sont :
+```
+rk2600 <commande> [args]
 
-- `status` lit la version de l'API et vérifie qu'elle vaut `RK2600_API_VERSION`.
-- `elevate` transmet une demande d'élévation au module.
-- `hide NAME` et `unhide NAME` transmettent au module une entrée de répertoire.
-
-Le périphérique par défaut est `/dev/rk2600`. Placez `--device PATH` avant la
-commande pour en choisir un autre. `NAME` doit contenir de 1 à 255 octets. Le
-compagnon refuse les noms vides, les chemins contenant `/`, `.` et `..`.
-
-## Compiler et tester
-
-Depuis la racine du dépôt, lancez :
-
-```sh
-make -C companion
-make -C companion STRICT=1
-make -C companion STRICT=1 test
-make -C companion clean
+  status           Affiche la version API et l'etat du module
+  privesc          Eleve les privileges et ouvre un shell root
+  hide <name>      Masque une entree de repertoire
+  unhide <name>    Revele une entree masquee
+  install [ko]     Installe le module + persistance OpenRC
+  uninstall        Supprime le module et la persistance
+  test             Lance la suite de tests automatisee
 ```
 
-`STRICT=1` ajoute `-Werror`. `test` vérifie l'aide, les arguments invalides,
-l'erreur de périphérique absent et les limites de longueur des noms.
+### status
 
-## État et limites
+Ouvre `/dev/.rk_ctl`, envoie `RK2600_IOC_STATUS` et affiche la version API
+et le flag `hidden`.
 
-Le client, le protocole ioctl, le Makefile, les tests CLI et ce guide sont en
-place. `make -C companion STRICT=1 test` passe sous WSL avec Ubuntu.
+### privesc
 
-Le dépôt ne contient pas encore le module noyau. Les tests actuels ne valident
-donc pas une requête ioctl réussie, les permissions du périphérique, une version
-d'API incompatible ni le comportement du module. Le code retourne 1 si
-l'ouverture, un ioctl, la vérification de version ou la fermeture échoue. Il
-retourne 2 si la commande ou ses arguments sont invalides.
+Envoie `RK2600_IOC_ELEVATE` puis `exec /bin/sh`. Le shell resultant tourne
+en `uid=0`.
 
-## Travail restant
+### hide / unhide
 
-1. Valider avec la personne qui écrit le module le chemin `/dev/rk2600`, les
-   numéros ioctl, les structures et `RK2600_API_VERSION`.
-2. Créer le périphérique dans la VM et régler ses permissions pour le compte
-   utilisateur prévu par le projet.
-3. Tester chaque commande dans la VM avec le module chargé, puis ajouter des
-   vérifications des réponses ioctl et des erreurs de permission.
-4. Mettre à jour ce guide si le protocole ou le comportement du module change.
+Envoie `RK2600_IOC_HIDE` ou `RK2600_IOC_UNHIDE` avec le nom fourni. Le nom
+doit faire entre 1 et 255 octets, sans `/`, et different de `.` ou `..`.
+
+### install
+
+Copie le `.ko` dans `/lib/modules/$(uname -r)/extra/`, cree le script de
+persistance `/etc/local.d/snd-compat.start`, active le service `local`
+d'OpenRC et charge le module.
+
+### uninstall
+
+Revele le module, le decharge avec `rmmod`, supprime le `.ko` et le script
+de persistance.
+
+### test
+
+Execute 12 tests automatises : privilege escalation, status, module hiding,
+file hiding (3 entrees), acces direct (2 interfaces), read filter, write
+stealth, dynamic hide/unhide. Affiche chaque commande, sa sortie et
+`PASS`/`FAIL`, avec un score final.
+
+## Codes de retour
+
+- `0` : succes
+- `1` : erreur fonctionnelle (ioctl echoue, module absent, etc.)
+- `2` : erreur d'usage (commande inconnue, arguments invalides)

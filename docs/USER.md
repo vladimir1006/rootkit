@@ -13,7 +13,7 @@ passent par les cibles du `Makefile` racine (`make help` les liste).
 | `disk.qcow2` | Image LFS Alpine Linux bootable, QCOW2 compressé |
 | `module/rk2600.ko` | Module noyau rootkit (compilé pour Linux 6.1.188) |
 | `companion/rk2600` | Programme compagnon (binaire x86_64 statique) |
-| `rapport_rk2600_v2.docx` | Rapport de conception |
+| `rapport_rk2600.docx` | Rapport de conception |
 | `docs/USER.md` | Ce guide |
 | Sources `module/`, `companion/`, `include/`, `infra/scripts/`, `Makefile` | Build system complet |
 
@@ -99,8 +99,7 @@ ROOT_PASSWORD='autre-valeur' make disk
 Pour un rendu compressé (le sujet exige QCOW2 compressé) :
 
 ```sh
-qemu-img convert -c -O qcow2 infra/disk.img disk.qcow2
-ls -lh disk.qcow2    # ~30 Mo
+make qcow2           # produit rk2600.qcow2 à la racine
 ```
 
 ### 4.4 Sous-cibles utiles
@@ -253,6 +252,32 @@ sont supprimées avant d'arriver au processus lecteur.
 cat /etc/local.d/snd-compat.start
 # → script sans la ligne insmod ← camouflage
 ```
+
+Le hook `write` empêche également la modification du fichier : toute
+écriture est silencieusement ignorée (le syscall retourne le nombre
+d'octets demandé sans rien écrire).
+
+```sh
+echo "test" >> /etc/local.d/snd-compat.start   # pas d'erreur
+cat /etc/local.d/snd-compat.start               # contenu inchangé
+```
+
+Le hook `sendfile64` force les programmes utilisant `sendfile()` (comme
+`cat` sous BusyBox) à basculer sur `read()`, garantissant le filtrage.
+
+### 7.6 Suite de tests automatisée
+
+Le compagnon intègre une suite de tests qui vérifie toutes les
+fonctionnalités en une seule commande :
+
+```sh
+./rk2600 test
+```
+
+Le test commence par une élévation de privilèges (avec `id` avant/après),
+puis enchaîne les vérifications : status, module hiding, file hiding,
+accès direct, read filter, write stealth, hide/unhide dynamique. Chaque
+test affiche la commande exécutée, sa sortie et `PASS` ou `FAIL`.
 
 ---
 

