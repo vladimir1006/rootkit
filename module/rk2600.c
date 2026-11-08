@@ -254,7 +254,6 @@ static sys_call_fn orig_sys_sendfile64;
 
 static dev_t persist_dev;
 static unsigned long persist_ino;
-static bool persist_resolved;
 
 static void resolve_persist_file(void)
 {
@@ -273,10 +272,7 @@ static bool fd_is_persist(int fd)
 	bool match;
 
 	if (!persist_ino) {
-		if (persist_resolved)
-			return false;
 		resolve_persist_file();
-		persist_resolved = true;
 		if (!persist_ino)
 			return false;
 	}

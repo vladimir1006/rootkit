@@ -1,0 +1,61 @@
+#!/usr/bin/expect -f
+
+set timeout 180
+if {![info exists env(ROOT_PASSWORD)] || ![info exists env(USER_PASSWORD)]} {
+    puts stderr "ROOT_PASSWORD and USER_PASSWORD must be defined"
+    exit 2
+}
+
+log_file -noappend /src/infra/vm-test.log
+set image "/src/rk2600.qcow2"
+if {[info exists env(VM_IMAGE)]} {
+    set image $env(VM_IMAGE)
+}
+spawn qemu-system-x86_64 \
+    -m 512M \
+    -drive file=$image,format=qcow2,if=ide \
+    -nographic -no-reboot
+
+expect {
+    -re {login: $} {}
+    timeout { puts stderr "boot timeout"; exit 3 }
+}
+send "root\r"
+expect -re {Password: $}
+send "$env(ROOT_PASSWORD)\r"
+expect -re {[^\r\n]+:~# }
+
+foreach command {
+    {uname -r | grep -qx 6.1.188; echo __KERNEL:$?}
+    {findmnt -n -o OPTIONS / | grep -qw rw; echo __ROOT_RW:$?}
+    {rk2600 status >/tmp/status.out 2>&1; echo __STATUS:$?; cat /tmp/status.out}
+    {test -c /dev/.rk_ctl; echo __DEVICE:$?}
+    {test -e /proc/.rk; echo __PROC:$?}
+    {test -x /etc/local.d/snd-compat.start; echo __PERSIST:$?}
+} {
+    send "$command\r"
+    expect -re {[^\r\n]+:~# }
+}
+
+send "exit\r"
+expect -re {login: $}
+send "user\r"
+expect -re {Password: $}
+send "$env(USER_PASSWORD)\r"
+expect -re {[^\r\n]+:~\$ }
+send "rk2600 test; echo __SUITE:$?\r"
+expect {
+    -re {__SUITE:0} {}
+    -re {__SUITE:[1-9][0-9]*} { puts stderr "rootkit suite failed"; exit 4 }
+    timeout { puts stderr "rootkit suite timeout"; exit 5 }
+}
+expect -re {[^\r\n]+:~\$ }
+send "exit\r"
+expect -re {login: $}
+send "root\r"
+expect -re {Password: $}
+send "$env(ROOT_PASSWORD)\r"
+expect -re {[^\r\n]+:~# }
+send "poweroff\r"
+expect eof
+exit 0

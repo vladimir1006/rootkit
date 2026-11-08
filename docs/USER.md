@@ -10,7 +10,7 @@ passent par les cibles du `Makefile` racine (`make help` les liste).
 
 | Fichier / dossier | Rôle |
 |---|---|
-| `disk.qcow2` | Image LFS Alpine Linux bootable, QCOW2 compressé |
+| `rk2600.qcow2` | Image LFS Alpine du TP01, bootable et compressée en QCOW2 |
 | `module/rk2600.ko` | Module noyau rootkit (compilé pour Linux 6.1.188) |
 | `companion/rk2600` | Programme compagnon (binaire x86_64 statique) |
 | `rapport_rk2600.docx` | Rapport de conception |
@@ -28,7 +28,7 @@ passent par les cibles du `Makefile` racine (`make help` les liste).
 
 Ces mots de passe sont définis dans le fichier `.env` à la racine du dépôt
 (`ROOT_PASSWORD` et `USER_PASSWORD`). Ils sont injectés automatiquement
-dans l'image Alpine lors du `make disk` — voir §4.3.
+dans l'image LFS Alpine lors du `make disk` — voir §4.3.
 
 ---
 
@@ -36,7 +36,7 @@ dans l'image Alpine lors du `make disk` — voir §4.3.
 
 - Linux x86_64 (Ubuntu/Debian/Alpine) avec KVM activé
 - `make`, `gcc`, `git`, `qemu-system-x86_64` ≥ 7.0
-- `docker` (image Alpine construite dans un conteneur)
+- `docker` (installation du système Alpine minimal dans l'image)
 - `grub-pc-bin`, `parted`, `dosfstools` (installation GRUB BIOS dans l'image)
 - ~8 Go d'espace disque libre pour la compilation du noyau et de la LFS
 
@@ -56,7 +56,7 @@ make status
 
 ## 4. Compilation (à partir du dépôt source)
 
-> Si tu utilises **l'image `disk.qcow2` déjà fournie dans le rendu**, saute
+> Si tu utilises **l'image `rk2600.qcow2` déjà fournie dans le rendu**, saute
 > directement à la [section 5](#5-lancer-la-vm). Cette section 4 est utile
 > pour reconstruire l'image intégralement.
 
@@ -81,7 +81,7 @@ make kernel-debug
 make all             # kernel + rootfs + module + companion
 ```
 
-### 4.3 Image disque Alpine + GRUB
+### 4.3 Image disque LFS Alpine + GRUB
 
 Les mots de passe des comptes `root` et `user` sont lus depuis le fichier
 `.env` à la racine du dépôt. Ce fichier est fourni dans l'archive du
@@ -89,7 +89,7 @@ rendu ; aucune commande `export` n'est nécessaire.
 
 ```sh
 cat .env             # pour relire les identifiants si besoin
-make disk            # image + Alpine + GRUB BIOS (profil base)
+make disk            # image + Alpine/OpenRC + comptes + GRUB BIOS
 ```
 
 ```sh
@@ -106,7 +106,7 @@ make qcow2           # produit rk2600.qcow2 à la racine
 
 ```sh
 make disk-image      # juste créer disk.img et le formater
-make disk-alpine     # (re)peupler l'image avec Alpine
+make disk-alpine     # (re)peupler une image existante avec Alpine
 make disk-grub       # (re)installer le noyau + GRUB dans l'image
 make mount           # monter disk.img pour modification manuelle
 make umount          # démonter proprement
