@@ -6,8 +6,8 @@ if {![info exists env(ROOT_PASSWORD)] || ![info exists env(USER_PASSWORD)]} {
     exit 2
 }
 
-log_file -noappend /src/infra/vm-test.log
-set image "/src/rk2600.qcow2"
+log_file -noappend infra/vm-test.log
+set image "rk2600.qcow2"
 if {[info exists env(VM_IMAGE)]} {
     set image $env(VM_IMAGE)
 }
