@@ -42,16 +42,27 @@ cleanup() {
         $SUDO umount "$MNT_DIR" 2>/dev/null || true
         MOUNTED=0
     fi
-    if [ -n "$LOOP" ]; then
-        $SUDO losetup -d "$LOOP" 2>/dev/null || true
-        LOOP=""
-    fi
+    # Détache tous les loop devices associés à l'image (pas seulement le dernier)
+    local loops
+    loops="$($SUDO losetup -j "$DISK_IMG" -O NAME -n 2>/dev/null || true)"
+    for l in $loops; do
+        $SUDO losetup -d "$l" 2>/dev/null || true
+    done
+    LOOP=""
 }
 trap cleanup EXIT
 
 attach() {
     need_file "$DISK_IMG" "lance d'abord : $0 image"
-    LOOP="$($SUDO losetup -Pf --show "$DISK_IMG")"
+    # Réutilise un loop device existant pour éviter la corruption
+    # liée aux caches incohérents entre plusieurs loop devices.
+    local existing
+    existing="$($SUDO losetup -j "$DISK_IMG" -O NAME -n 2>/dev/null | head -1)"
+    if [ -n "$existing" ]; then
+        LOOP="$existing"
+    else
+        LOOP="$($SUDO losetup -Pf --show "$DISK_IMG")"
+    fi
     # udev met un instant à créer loopXp1
     local i
     for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -64,6 +75,11 @@ attach() {
 
 mount_part() {
     mkdir -p "$MNT_DIR"
+    if mountpoint -q "$MNT_DIR" 2>/dev/null; then
+        MOUNTED=1
+        echo "Déjà monté : $MNT_DIR"
+        return 0
+    fi
     $SUDO mount "${LOOP}p1" "$MNT_DIR"
     MOUNTED=1
     echo "Monté : $MNT_DIR"
